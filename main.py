@@ -374,4 +374,4 @@ app.add_handler(CommandHandler("clear", clear))
 app.add_handler(CallbackQueryHandler(button))
 
 print("✅ Bot running with database persistence...")
-app.run_polling()
+app.run_webhook(listen="0.0.0.0", port=int(os.environ.get("PORT", "8080")), url_path=TOKEN, webhook_url="https://renderteset-1.onrender.com/" + TOKEN)
