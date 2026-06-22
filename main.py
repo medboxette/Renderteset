@@ -376,4 +376,25 @@ app.add_handler(CallbackQueryHandler(button))
 print("✅ Bot running with database persistence...")
 import os
 PORT = int(os.environ.get("PORT", 8080))
-app.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"https://renderteset-1.onrender.com/{TOKEN}")
+import tornado.web
+
+class MainHandler(tornado.web.RequestHandler):
+    def get(self):
+        self.write("Bot is running perfectly!")
+
+# هاد السطر كيزيد الصفحة الرئيسية للسيرفر الداخلي
+app.run_webhook(
+    listen="0.0.0.0",
+    port=PORT,
+    url_path=TOKEN,
+    webhook_url=f"https://renderteset-1.onrender.com/{TOKEN}",
+    allowed_updates=["message", "callback_query"],
+    webhook_secret=None
+)
+
+# هنا كنقولو للسيرفر الداخلي يستقبل الرابط الرئيسي
+if app.updater and app.updater.http_server:
+    app.updater.http_server.application.add_handlers(r".*", [
+        (r"/", MainHandler)
+    ])
+    
