@@ -176,7 +176,9 @@ def db_clear_all():
             cur.execute("DELETE FROM scores")
             cur.execute("UPDATE counter SET value = 0 WHERE id = 1")
         conn.commit()
-        # ── Keyboards ─────────────────────────────────────────────────────────────────
+
+
+# ── Keyboards ─────────────────────────────────────────────────────────────────
 
 def build_keyboard(taken: bool):
     if not taken:
@@ -194,28 +196,71 @@ def build_keyboard(taken: bool):
 # ── Handlers ──────────────────────────────────────────────────────────────────
 
 async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = " ".join(context.args)
-    if not text:
-        await update.message.reply_text("⚠️ خاصك تكتب معلومات الطلبية بعد /cmd")
-        return
+    # إذا تم إرسال الأمر في الخاص (المحادثة السرية مع البوت)
+    if update.effective_chat.type == 'private':
+        if len(context.args) < 2:
+            await update.message.reply_text(
+                "⚠️ طريقة كتابة الأمر فالخاص خاصها تكون هكا:\n"
+                "`/cmd [chat_id] [نص الكوموند]`"
+            )
+            return
+        
+        try:
+            livreur_chat_id = int(context.args[0])
+            text = " ".join(context.args[1:])
+            
+            counter = db_increment_counter()
+            now = datetime.now().strftime("%H:%M")
+            
+            # إرسال الكوموند لليفرور في الخاص ديالو مع الأزرار
+            msg = await context.bot.send_message(
+                chat_id=livreur_chat_id,
+                text=f"🔢 طلبية #{counter}\n🕒 {now}\n\n📦 طلبية جديدة خاصة بك:\n\n{text}",
+                reply_markup=build_keyboard(taken=False)
+            )
+            
+            # حفظ الطلبية في الداتابيز بالـ ID ديال الرسالة اللي مشات لليفرور
+            db_save_order(msg.message_id, {
+                "number": counter,
+                "text": text,
+                "time": now,
+                "taken": False,
+                "done": False,
+                "taken_by": None,
+                "taken_by_id": None,
+            })
+            
+            await update.message.reply_text(f"✅ تم إرسال الطلبية #{counter} بنجاح إلى الليفرور فالخاص.")
+            
+        except ValueError:
+            await update.message.reply_text("❌ خطأ: الـ Chat ID خاصو يكون أرقام فقط!")
+        except Exception as e:
+            await update.message.reply_text(f"❌ وقع خطأ: {e}\n(تأكد بلي الليفرور ديجا دار /start للبوت)")
+            
+    # إذا تم إرسال الأمر في الكروب (الطريقة القديمة ديالك)
+    else:
+        text = " ".join(context.args)
+        if not text:
+            await update.message.reply_text("⚠️ خاصك تكتب معلومات الطلبية بعد /cmd")
+            return
 
-    counter = db_increment_counter()
-    now = datetime.now().strftime("%H:%M")
+        counter = db_increment_counter()
+        now = datetime.now().strftime("%H:%M")
 
-    msg = await update.message.reply_text(
-        f"🔢 طلبية #{counter}\n🕒 {now}\n\n📦 طلبية جديدة:\n\n{text}",
-        reply_markup=build_keyboard(taken=False),
-    )
+        msg = await update.message.reply_text(
+            f"🔢 طلبية #{counter}\n🕒 {now}\n\n📦 طلبية جديدة:\n\n{text}",
+            reply_markup=build_keyboard(taken=False),
+        )
 
-    db_save_order(msg.message_id, {
-        "number": counter,
-        "text": text,
-        "time": now,
-        "taken": False,
-        "done": False,
-        "taken_by": None,
-        "taken_by_id": None,
-    })
+        db_save_order(msg.message_id, {
+            "number": counter,
+            "text": text,
+            "time": now,
+            "taken": False,
+            "done": False,
+            "taken_by": None,
+            "taken_by_id": None,
+            })
 
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
