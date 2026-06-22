@@ -123,7 +123,7 @@ def db_update_order(msg_id: int, order: dict):
         conn.commit()
 
 
-def db_get_order(msg_id: int) -> dict | None:
+def db_get_order(msg_id: int):
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("SELECT * FROM orders WHERE msg_id = %s", (msg_id,))
@@ -273,6 +273,5 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         order["taken"] = False
         order["taken_by"] = None
-        order["taken_by_id"] = None
-        db_update_order(msg_id,
+        order
         
