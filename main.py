@@ -183,12 +183,12 @@ def db_clear_all():
 def build_keyboard(taken: bool):
     if not taken:
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ قبول", callback_data="take")]
+            [InlineKeyboardButton("قبطتها 🚚", callback_data="take")]
         ])
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🏁 مكمّل", callback_data="done"),
-            InlineKeyboardButton("❌ إلغاء", callback_data="cancel"),
+            InlineKeyboardButton("🏁 تليفرات", callback_data="done"),
+            InlineKeyboardButton("❌ لغيتها", callback_data="cancel"),
         ]
     ])
 
@@ -198,14 +198,14 @@ def build_keyboard(taken: bool):
 async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = " ".join(context.args)
     if not text:
-        await update.message.reply_text("⚠️ خاصك تكتب نص الكوماند بعد /cmd")
+        await update.message.reply_text("⚠️ خاصك تكتب معلومات الطلبية بعد /cmd")
         return
 
     counter = db_increment_counter()
     now = datetime.now().strftime("%H:%M")
 
     msg = await update.message.reply_text(
-        f"🔢 كوماند #{counter}\n🕒 {now}\n\n🚚 كوموند جديد:\n\n{text}",
+        f"🔢 طلبية #{counter}\n🕒 {now}\n\n📦 طلبية جديدة:\n\n{text}",
         reply_markup=build_keyboard(taken=False),
     )
 
@@ -229,12 +229,12 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     order = db_get_order(msg_id)
     if not order:
-        await query.answer("⚠️ هاد الكوماند ماشي موجود")
+        await query.answer("⚠️ هاد الطلبية ما كايناش")
         return
 
     if data == "take":
         if order["taken"]:
-            await query.answer("❌ هاد الكوموند خذاها شي واحد", show_alert=True)
+            await query.answer("❌ هاد الطلبية قبطها شي واحد آخر", show_alert=True)
             return
 
         order["taken"] = True
@@ -244,27 +244,27 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db_add_score(user, +1)
 
         await query.edit_message_text(
-            f"✅ خذاها: {user}\n🔢 كوماند #{order['number']}\n🕒 {order['time']}\n\n🚚 كوموند جديد:\n\n{order['text']}",
+            f"✅ قبطها: {user}\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 طلبية جديدة:\n\n{order['text']}",
             reply_markup=build_keyboard(taken=True),
         )
         await query.answer()
 
     elif data == "done":
         if order["taken_by_id"] != user_id and user_id not in ADMIN_IDS:
-            await query.answer("❌ غير اللي خذا الكوماند يقدر يكملها", show_alert=True)
+            await query.answer("❌ غير اللي قبط الطلبية هو اللي يقدر يدير تليفرات", show_alert=True)
             return
 
         order["done"] = True
         db_update_order(msg_id, order)
 
         await query.edit_message_text(
-            f"🏁 مكمّل بواسطة: {order['taken_by']}\n🔢 كوماند #{order['number']}\n🕒 {order['time']}\n\n🚚 كوموند جديد:\n\n{order['text']}"
+            f"🏁 تليفرات بواسطة: {order['taken_by']}\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 طلبية جديدة:\n\n{order['text']}"
         )
-        await query.answer("✅ تم تأكيد الإكمال")
+        await query.answer("✅ تم تأكيد التوصيل")
 
     elif data == "cancel":
         if order["taken_by_id"] != user_id and user_id not in ADMIN_IDS:
-            await query.answer("❌ غير اللي خذا الكوماند يقدر يلغيها", show_alert=True)
+            await query.answer("❌ غير اللي قبط الطلبية يقدر يلغيها", show_alert=True)
             return
 
         taken_by = order["taken_by"]
@@ -274,106 +274,5 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         order["taken"] = False
         order["taken_by"] = None
         order["taken_by_id"] = None
-        db_update_order(msg_id, order)
-
-        await query.edit_message_text(
-            f"🔢 كوماند #{order['number']}\n🕒 {order['time']}\n\n🚚 كوموند جديد:\n\n{order['text']}",
-            reply_markup=build_keyboard(taken=False),
-        )
-        await query.answer("❌ تم الإلغاء، الكوماند رجع متاح")
-
-
-async def list_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    all_orders = db_get_all_orders()
-    if not all_orders:
-        await update.message.reply_text("📋 ما كاين حتى كوماند!")
-        return
-
-    msg = "📋 *لائحة الكوماندات:*\n\n"
-    for o in all_orders:
-        if o["done"]:
-            status = "🏁 مكمّل"
-        elif o["taken"]:
-            status = f"✅ مخذوز ({o['taken_by']})"
-        else:
-            status = "⏳ في الانتظار"
-        msg += f"#{o['number']} [{o['time']}] {status} — {o['text']}\n"
-
-    await update.message.reply_text(msg, parse_mode="Markdown")
-
-
-async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_name = update.effective_user.first_name
-
-    all_orders = db_get_all_orders()
-    mine = [o for o in all_orders if o["taken_by_id"] == user_id]
-
-    if not mine:
-        await update.message.reply_text("📭 ما عندك حتى كوماند مخذوز.")
-        return
-
-    msg = f"📦 *الكوماندات ديال {user_name}:*\n\n"
-    for o in mine:
-        status = "🏁 مكمّل" if o["done"] else "✅ مخذوز"
-        msg += f"#{o['number']} [{o['time']}] {status} — {o['text']}\n"
-
-    await update.message.reply_text(msg, parse_mode="Markdown")
-
-
-async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    all_scores = db_get_scores()
-    if not all_scores:
-        await update.message.reply_text("🏆 ما كاين حتى واحد خذا كوماند!")
-        return
-
-    msg = "🏆 *لائحة المتصدرين:*\n\n"
-    medals = ["🥇", "🥈", "🥉"]
-
-    for i, (username, score) in enumerate(all_scores):
-        medal = medals[i] if i < 3 else f"{i+1}."
-        msg += f"{medal} {username} — {score} كوماند\n"
-
-    await update.message.reply_text(msg, parse_mode="Markdown")
-
-
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    s = db_get_stats()
-    today = datetime.now().strftime("%d/%m/%Y")
-    msg = (
-        f"📊 *إحصائيات الكوماندات — {today}*\n\n"
-        f"📦 المجموع: {s['total']}\n"
-        f"🏁 مكملة: {s['done']}\n"
-        f"✅ جارية: {s['in_progress']}\n"
-        f"⏳ في الانتظار: {s['waiting']}"
-    )
-    await update.message.reply_text(msg, parse_mode="Markdown")
-
-
-async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in ADMIN_IDS:
-        await update.message.reply_text("❌ هاد الأمر مخصص للأدمن فقط.")
-        return
-
-    db_clear_all()
-    await update.message.reply_text("🗑️ تم تصفير الكوماندات والنقاط.")
-
-
-# ── Main ──────────────────────────────────────────────────────────────────────
-
-init_db()
-
-app = ApplicationBuilder().token(TOKEN).build()
-app.add_handler(CommandHandler("cmd", cmd))
-app.add_handler(CommandHandler("list", list_orders))
-app.add_handler(CommandHandler("myorders", my_orders))
-app.add_handler(CommandHandler("top", top))
-app.add_handler(CommandHandler("stats", stats))
-app.add_handler(CommandHandler("clear", clear))
-app.add_handler(CallbackQueryHandler(button))
-
-print("✅ Bot running with database persistence...")
-import os
-PORT = int(os.environ.get("PORT", 8080))
-app.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"https://renderteset-1.onrender.com/{TOKEN}")
+        db_update_order(msg_id,
+        
