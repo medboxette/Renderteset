@@ -39,7 +39,6 @@ def init_db():
                     reply_to_id INTEGER
                 )
             """)
-            # جلب الأعمدة الموجودة للتأكد من وجود reply_to_id
             cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='orders'")
             columns = [row[0] for row in cur.fetchall()]
             if 'reply_to_id' not in columns:
@@ -268,7 +267,7 @@ async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "done": False,
             "taken_by": None,
             "taken_by_id": None,
-            "reply_to_id": update.message.message_id  # حفظنا الـ ID ديال الأمر /cmd عشان نمسحوه من بعد
+            "reply_to_id": update.message.message_id
         })
 
 
@@ -297,19 +296,14 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db_update_order(msg_id, order)
         db_add_score(user, +1)
 
-        # ── 1. إذا تقبطات من الكروب (حذف رسالة البوت + رسالة الأمر /cmd) ──
         if chat_type != 'private':
             try:
-                # حذف رسالة الطلبية
                 await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-                # حذف أمر /cmd الأصلي
                 if order.get("reply_to_id"):
                     await context.bot.delete_message(chat_id=chat_id, message_id=order["reply_to_id"])
                 await query.answer("✅ قبطتيها! وتم الحذف من الكروب.", show_alert=True)
             except Exception as e:
                 await query.answer(f"⚠️ تقبطات ولكن وقع مشكل فالحذف: {e}", show_alert=True)
-        
-        # ── 2. إذا تقبطات من الخاص ──
         else:
             await query.edit_message_text(
                 f"✅ قبطها: {user}\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 طلبية جديدة:\n\n{order['text']}",
@@ -317,7 +311,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             await query.answer()
 
-        # ── 🚀 إرسال الكوموند كاملة لليفرور في الخاص ديالو ──
         try:
             await context.bot.send_message(
                 chat_id=user_id,
@@ -325,13 +318,12 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      f"🔢 طلبية *#{order['number']}*\n"
                      f"🕒 الوقت: {order['time']}\n\n"
                      f"📋 *معلومات الشحن:*\n{order['text']}",
-                reply_markup=build_keyboard(taken=True),  # كنعطيوه الأزرار (تليفرات/لغيتها) فالخاص ديالو
+                reply_markup=build_keyboard(taken=True),
                 parse_mode="Markdown"
             )
         except Exception:
             pass
 
-        # ── إرسال إشعار للأدمن ──
         for admin_id in ADMIN_IDS:
             try:
                 await context.bot.send_message(
@@ -369,4 +361,135 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="Markdown"
                 )
             except Exception:
-                
+                pass
+
+    elif data == "cancel":
+        if order["taken_by_id"] != user_id and user_id not in ADMIN_IDS:
+            await query.answer("❌ غير اللي قبط الطلبية يقدر يلغيها", show_alert=True)
+            return
+
+        taken_by = order["taken_by"]
+        if taken_by:
+            db_add_score(taken_by, -1)
+
+        order["taken"] = False
+        order["taken_by"] = None
+        order["taken_by_id"] = None
+        db_update_order(msg_id, order)
+
+        try:
+            await query.edit_message_text(
+                f"🔢 طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 طلبية جديدة:\n\n{order['text']}",
+                reply_markup=build_keyboard(taken=False),
+            )
+        except Exception:
+            pass
+        await query.answer("❌ تم الإلغاء، الطلبية رجعات خاوية")
+
+        for admin_id in ADMIN_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=f"⚠️ *إشعار إلغاء:*\n\n"
+                         f"الكوموند *#{order['number']}* تفتح إلغاؤها ورجعات متاحة.",
+                    parse_mode="Markdown"
+                )
+            except Exception:
+                pass
+
+
+async def list_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    all_orders = db_get_all_orders()
+    if not all_orders:
+        await update.message.reply_text("📋 ما كاين حتى طلبية دابا!")
+        return
+
+    msg = "📋 *لائحة الطلبيات:*\n\n"
+    for o in all_orders:
+        if o["done"]:
+            status = "🏁 تليفرات"
+        elif o["taken"]:
+            status = f"✅ مقبوطة ({o['taken_by']})"
+        else:
+            status = "⏳ مازال ما تقبطات"
+        msg += f"#{o['number']} [{o['time']}] {status} — {o['text']}\n"
+
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_name = update.effective_user.first_name
+
+    all_orders = db_get_all_orders()
+    mine = [o for o in all_orders if o["taken_by_id"] == user_id]
+
+    if not mine:
+        await update.message.reply_text("📭 ما قابط حتى طلبية دابا.")
+        return
+
+    msg = f"📦 *الطلبيات ديال {user_name}:*\n\n"
+    for o in mine:
+        status = "🏁 تليفرات" if o["done"] else "✅ مقبوطة"
+        msg += f"#{o['number']} [{o['time']}] {status} — {o['text']}\n"
+
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    all_scores = db_get_scores()
+    if not all_scores:
+        await update.message.reply_text("🏆 ما كاين حتى واحد قبط شي طلبية!")
+        return
+
+    msg = "🏆 *لائحة المتصدرين:*\n\n"
+    medals = ["🥇", "🥈", "🥉"]
+
+    for i, (username, score) in enumerate(all_scores):
+        medal = medals[i] if i < 3 else f"{i+1}."
+        msg += f"{medal} {username} — {score} طلبية\n"
+
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    s = db_get_stats()
+    today = datetime.now().strftime("%d/%m/%Y")
+    msg = (
+        f"📊 *إحصائيات الطلبيات — {today}*\n\n"
+        f"📦 المجموع: {s['total']}\n"
+        f"🏁 تليفرات: {s['done']}\n"
+        f"✅ جارية: {s['in_progress']}\n"
+        f"⏳ مازال ما تقبطات: {s['waiting']}"
+    )
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ هاد الأمر مخصص للأدمن فقط.")
+        return
+
+    db_clear_all()
+    await update.message.reply_text("🗑️ تم تصفير الطلبيات والنقاط بنجاح.")
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+init_db()
+
+app = ApplicationBuilder().token(TOKEN).build()
+app.add_handler(CommandHandler("cmd", cmd))
+app.add_handler(CommandHandler("list", list_orders))
+app.add_handler(CommandHandler("myorders", my_orders))
+app.add_handler(CommandHandler("top", top))
+app.add_handler(CommandHandler("stats", stats))
+app.add_handler(CommandHandler("clear", clear))
+app.add_handler(CallbackQueryHandler(button))
+
+print("✅ Bot running with database persistence...")
+import os
+PORT = int(os.environ.get("PORT", 8080))
+app.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"https://renderteset-1.onrender.com/{TOKEN}")
+        
