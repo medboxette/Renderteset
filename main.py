@@ -404,4 +404,73 @@ async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = update.effective_user.first_name
 
     all_orders = db_get_all_orders()
-    mine =
+    mine = [o for o in all_orders if o["taken_by_id"] == user_id]  # السطر اللي كان فيه المشكل تم تصحيحه هنا
+
+    if not mine:
+        await update.message.reply_text("📭 ما قابط حتى طلبية دابا.")
+        return
+
+    msg = f"📦 *الطلبيات ديال {user_name}:*\n\n"
+    for o in mine:
+        status = "🏁 تليفرات" if o["done"] else "✅ مقبوطة"
+        msg += f"#{o['number']} [{o['time']}] {status} — {o['text']}\n"
+
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    all_scores = db_get_scores()
+    if not all_scores:
+        await update.message.reply_text("🏆 ما كاين حتى واحد قبط شي طلبية!")
+        return
+
+    msg = "🏆 *لائحة المتصدرين:*\n\n"
+    medals = ["🥇", "🥈", "🥉"]
+
+    for i, (username, score) in enumerate(all_scores):
+        medal = medals[i] if i < 3 else f"{i+1}."
+        msg += f"{medal} {username} — {score} طلبية\n"
+
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    s = db_get_stats()
+    today = datetime.now().strftime("%d/%m/%Y")
+    msg = (
+        f"📊 *إحصائيات الطلبيات — {today}*\n\n"
+        f"📦 المجموع: {s['total']}\n"
+        f"🏁 تليفرات: {s['done']}\n"
+        f"✅ جارية: {s['in_progress']}\n"
+        f"⏳ مازال ما تقبطات: {s['waiting']}"
+    )
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ هاد الأمر مخصص للأدمن فقط.")
+        return
+
+    db_clear_all()
+    await update.message.reply_text("🗑️ تم تصفير الطلبيات والنقاط بنجاح.")
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+init_db()
+
+app = ApplicationBuilder().token(TOKEN).build()
+app.add_handler(CommandHandler("cmd", cmd))
+app.add_handler(CommandHandler("list", list_orders))
+app.add_handler(CommandHandler("myorders", my_orders))
+app.add_handler(CommandHandler("top", top))
+app.add_handler(CommandHandler("stats", stats))
+app.add_handler(CommandHandler("clear", clear))
+app.add_handler(CallbackQueryHandler(button))
+
+print("✅ Bot running with database persistence...")
+import os
+PORT = int(os.environ.get("PORT", 8080))
+app.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"https://renderteset-1.onrender.com/{TOKEN}")
