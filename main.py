@@ -14,6 +14,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL environment variable is not set")
 
+# 🚨 الـ ID ديالك كأدمن باش يجيوك الإشعارات هنا ف الخاص
 ADMIN_IDS = [6243248782]
 
 # 🌐 الـ ID ديال الجروب ديالك
@@ -27,9 +28,6 @@ def get_conn():
 def init_db():
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # مسح الجدول القديم المرون لمرة واحدة عند التشغيل
-            cur.execute("DROP TABLE IF EXISTS orders;")
-            
             cur.execute("""
             CREATE TABLE IF NOT EXISTS orders (
                 group_msg_id BIGINT PRIMARY KEY,
@@ -60,7 +58,7 @@ def init_db():
             ON CONFLICT (id) DO NOTHING
             """)
             conn.commit()
-    print("✅ Database reset and initialized successfully!")
+    print("✅ Database initialized safely")
 
 def db_increment_counter() -> int:
     with get_conn() as conn:
@@ -241,6 +239,17 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.answer("✅ قبطتي الطلبية! شوف الخاص ديالك.")  
 
+        # 🔔 إشعار للأدمن: الطلبية تقبطات
+        for admin_id in ADMIN_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=f"🚚 *إشعار جديد:*\nالليفرور *{user}* قبط الطلبية *#{order['number']}*\n\n📦 *الطلبية:* {order['text']}",
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                print(f"Error sending admin notification: {e}")
+
     elif data == "done":  
         if order["taken_by_id"] != user_id and user_id not in ADMIN_IDS:  
             await query.answer("❌ غير اللي قبط الطلبية هو اللي يقدر يدير تليفرات", show_alert=True)  
@@ -253,6 +262,17 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text=f"🏁 تليفرات بواسطة: {order['taken_by']}\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 الطلبية:\n\n{order['text']}"  
         )  
         await query.answer("✅ تم تأكيد التوصيل")  
+
+        # 🔔 إشعار للأدمن: الطلبية تليفرات
+        for admin_id in ADMIN_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=f"🏁 *إشعار جديد:*\nالطلبية *#{order['number']}* تليفرات بنجاح بواسطة *{order['taken_by']}*! 🎉",
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                print(f"Error sending admin notification: {e}")
 
     elif data == "cancel":  
         if order["taken_by_id"] != user_id and user_id not in ADMIN_IDS:  
@@ -280,6 +300,17 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.message.delete()
         await query.answer("❌ تم الإلغاء، الطلبية رجعات للجروب.")
+
+        # 🔔 إشعار للأدمن: الطلبية تلغات
+        for admin_id in ADMIN_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=f"❌ *إشعار جديد:*\nالطلبية *#{order['number']}* تلغات من طرف *{taken_by}* ورجعات للجروب خاوية.",
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                print(f"Error sending admin notification: {e}")
 
 async def list_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     all_orders = db_get_all_orders()
