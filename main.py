@@ -16,7 +16,7 @@ if not DATABASE_URL:
 
 ADMIN_IDS = [6243248782]
 
-# 🌐 الـ ID ديال الجروب ديالك مأخوذ من رسالتك
+# 🌐 الـ ID ديال الجروب ديالك
 GROUP_CHAT_ID = -1003929375047  
 
 # ── Database ──────────────────────────────────────────────────────────────────
@@ -27,10 +27,11 @@ def get_conn():
 def init_db():
     with get_conn() as conn:
         with conn.cursor() as cur:
+            # ردينا group_msg_id هو الساس (PRIMARY KEY) باش ما يوقعش تداخل
             cur.execute("""
             CREATE TABLE IF NOT EXISTS orders (
-                msg_id      INTEGER PRIMARY KEY,  -- ID ديال الميساج ف الخاص ديال الأدمن
-                group_msg_id INTEGER,             -- ID ديال الميساج ف الجروب
+                group_msg_id BIGINT PRIMARY KEY,  -- ID ديال الميساج ف الجروب
+                private_msg_id BIGINT,            -- ID ديال الميساج ف الخاص ديال الأدمن
                 number      INTEGER NOT NULL,
                 text        TEXT    NOT NULL,
                 time        TEXT    NOT NULL,
@@ -60,13 +61,6 @@ def init_db():
             conn.commit()
     print("✅ Database initialized")
 
-def db_get_counter() -> int:
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT value FROM counter WHERE id = 1")
-            row = cur.fetchone()
-            return row[0] if row else 0
-
 def db_increment_counter() -> int:
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -75,21 +69,20 @@ def db_increment_counter() -> int:
             conn.commit()
             return value
 
-def db_save_order(msg_id: int, order: dict):
+def db_save_order(group_msg_id: int, order: dict):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-            INSERT INTO orders (msg_id, group_msg_id, number, text, time, taken, done, taken_by, taken_by_id)
+            INSERT INTO orders (group_msg_id, private_msg_id, number, text, time, taken, done, taken_by, taken_by_id)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (msg_id) DO UPDATE SET
-                group_msg_id = EXCLUDED.group_msg_id,
-                taken        = EXCLUDED.taken,
-                done         = EXCLUDED.done,
-                taken_by     = EXCLUDED.taken_by,
-                taken_by_id  = EXCLUDED.taken_by_id
+            ON CONFLICT (group_msg_id) DO UPDATE SET
+                taken       = EXCLUDED.taken,
+                done        = EXCLUDED.done,
+                taken_by    = EXCLUDED.taken_by,
+                taken_by_id = EXCLUDED.taken_by_id
             """, (
-                msg_id,
-                order.get("group_msg_id"),
+                group_msg_id,
+                order.get("private_msg_id"),
                 order["number"],
                 order["text"],
                 order["time"],
@@ -100,38 +93,29 @@ def db_save_order(msg_id: int, order: dict):
             ))
             conn.commit()
 
-def db_update_order(msg_id: int, order: dict):
+def db_update_order(group_msg_id: int, order: dict):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
             UPDATE orders SET
-                group_msg_id = %s,
                 taken        = %s,
                 done         = %s,
                 taken_by     = %s,
                 taken_by_id  = %s
-            WHERE msg_id = %s
+            WHERE group_msg_id = %s
             """, (
-                order.get("group_msg_id"),
                 order["taken"],
                 order["done"],
                 order["taken_by"],
                 order["taken_by_id"],
-                msg_id,
+                group_msg_id,
             ))
             conn.commit()
 
-def db_get_order_by_group_msg(group_msg_id: int):
+def db_get_order(group_msg_id: int):
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("SELECT * FROM orders WHERE group_msg_id = %s", (group_msg_id,))
-            row = cur.fetchone()
-            return dict(row) if row else None
-
-def db_get_order_by_private_msg(msg_id: int):
-    with get_conn() as conn:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute("SELECT * FROM orders WHERE msg_id = %s", (msg_id,))
             row = cur.fetchone()
             return dict(row) if row else None
 
@@ -194,7 +178,6 @@ def build_keyboard(taken: bool):
 # ── Handlers ──────────────────────────────────────────────────────────────────
 
 async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # التأكد أن الأمر جا ف الخاص ماشي ف الجروب
     if update.effective_chat.type != "private":
         return
 
@@ -217,12 +200,11 @@ async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ فشل إرسال الطلبية للجروب. تأكد من الـ ID وصلاحيات الأدمن للبوت.\nError: {e}")
         return
 
-    # تأكيد للأدمن ف الخاص
     await update.message.reply_text(f"✅ تم إرسال الطلبية #{counter} بنجاح إلى الجروب.")
 
-    # حفظ الطلبية ف قاعدة البيانات بـ ID ديال ميساج الأدمن
-    db_save_order(update.message.message_id, {  
-        "group_msg_id": group_msg.message_id,
+    # الحفظ باستعمال group_msg.message_id كـ مفتاح أساسي
+    db_save_order(group_msg.message_id, {  
+        "private_msg_id": update.message.message_id,
         "number": counter,  
         "text": text,  
         "time": now,  
@@ -234,20 +216,16 @@ async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user = query.from_user.first_name
+    user = query.from_user.first_name or query.from_user.username or "ليفرور"
     user_id = query.from_user.id
-    msg_id = query.message.message_id
+    msg_id = query.message.message_id  # هادا ديما غيكون هو ID الميساج لي جا فيه الكليك
     data = query.data
-    chat_type = query.message.chat.type
 
-    # البحث عن الطلبية على حسب واش الضغط جا ف الجروب ولا ف الخاص
-    if chat_type in ["group", "supergroup"]:
-        order = db_get_order_by_group_msg(msg_id)
-    else:
-        order = db_get_order_by_private_msg(msg_id)
+    # جلب الطلبية (ديما بـ msg_id حيت دابا هو الـ Primary Key للجروب والخاص بالتناوب)
+    order = db_get_order(msg_id)
 
     if not order:  
-        await query.answer("⚠️ هاد الطلبية ما كايناش ف السيستم", show_alert=True)  
+        await query.answer("⚠️ هاد الطلبية ما كايناش ف السيستم أو قديمة", show_alert=True)  
         return  
 
     if data == "take":  
@@ -255,9 +233,10 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ هاد الطلبية قبطها شي واحد آخر", show_alert=True)  
             return  
 
-        # محاولة إرسال الطلبية لليفرور ف الخاص أولاً للتأكد أنه مفعل البوت
+        # محاولة إرسال الطلبية لليفرور ف الخاص أولاً
         try:
-            await context.bot.send_message(
+            # الميساج الجديد ف الخاص غايمشي بـ ID جديد، وخاصنا نحدثوه ف قاعدة البيانات باش يخدمو أزرار الخاص
+            private_msg = await context.bot.send_message(
                 chat_id=user_id,
                 text=f"✅ قبطتيها بنجاح:\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 تفاصيل الطلبية:\n\n{order['text']}",
                 reply_markup=build_keyboard(taken=True)
@@ -266,16 +245,20 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("⚠️ خاصك ضروري تدخل عند البوت ف الخاص ودير /start عاد تقدر تقبط الطلبيات!", show_alert=True)
             return
 
-        # تحديث البيانات بعد نجاح الإرسال ف الخاص
+        # تحديث البيانات ومسح القديمة وتعويضها بـ ID الخاص الجديد باش "تليفرات" تخدم ف الخاص
         order["taken"] = True  
         order["taken_by"] = user  
         order["taken_by_id"] = user_id  
-        db_update_order(order["msg_id"], order)  
+        
+        # مسح السطر القديم وحفظه بالـ ID الجديد (ديال الخاص) باش الأزرار الجداد يخدمو لليفرور ف شاتو
+        db_clear_specific_order(msg_id)
+        db_save_order(private_msg.message_id, order)
+        
         db_add_score(user, +1)  
 
-        # مسح الكومند من الجروب باش ما تبقاش باينة للآخرين
+        # مسح الكومند من الجروب
         try:
-            await context.bot.delete_message(chat_id=query.message.chat_id, message_id=msg_id)
+            await context.bot.delete_message(chat_id=GROUP_CHAT_ID, message_id=msg_id)
         except Exception as e:
             print(f"Error deleting group message: {e}")
 
@@ -287,7 +270,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return  
 
         order["done"] = True  
-        db_update_order(order["msg_id"], order)  
+        db_update_order(msg_id, order)  
 
         await query.edit_message_text(  
             f"🏁 تليفرات بواسطة: {order['taken_by']}\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 الطلبية:\n\n{order['text']}"  
@@ -307,22 +290,28 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         order["taken_by"] = None  
         order["taken_by_id"] = None  
 
-        # إعادة إرسال الطلبية للجروب حيت تلغات
+        # إعادة إرسال الطلبية للجروب
         try:
             new_group_msg = await context.bot.send_message(
                 chat_id=GROUP_CHAT_ID,
                 text=f"🔄 (رجعات خاوية) طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 الطلبية:\n\n{order['text']}",
                 reply_markup=build_keyboard(taken=False)
             )
-            order["group_msg_id"] = new_group_msg.message_id
+            # مسح سطر الخاص وإعادة بنائه بـ ID الجروب الجديد
+            db_clear_specific_order(msg_id)
+            db_save_order(new_group_msg.message_id, order)
         except Exception as e:
             print(f"Error re-sending to group: {e}")
 
-        db_update_order(order["msg_id"], order)  
-
-        # مسح الميساج من الخاص ديال الليفرور لي لغاها
+        # مسح الميساج من الخاص ديال الليفرور
         await query.message.delete()
         await query.answer("❌ تم الإلغاء، الطلبية رجعات للجروب.")
+
+def db_clear_specific_order(group_msg_id: int):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM orders WHERE group_msg_id = %s", (group_msg_id,))
+            conn.commit()
 
 async def list_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     all_orders = db_get_all_orders()
