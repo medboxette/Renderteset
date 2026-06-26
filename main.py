@@ -312,21 +312,35 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 print(f"Error sending admin notification: {e}")
 
+# 📊 تعديل دالة الاستعراض لتصبح ملونة ومنظمة كـ "الجدول"
 async def list_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     all_orders = db_get_all_orders()
     if not all_orders:
         await update.message.reply_text("📋 ما كاين حتى طلبية دابا!")
         return
 
-    msg = "📋 *لائحة الطلبيات:*\n\n"  
-    for o in all_orders:  
+    msg = "📋 *لائحة الطلبيات اليومية*\n"
+    msg += "━━━━━━━━━━━━━━━\n"
+    
+    for i, o in enumerate(all_orders):  
         if o["done"]:  
-            status = "🏁 تليفرات"  
+            # طلبية مكملة: مربع أخضر
+            status_line = f"🟩 *[#{o['number']}]* 🕒 {o['time']}"
         elif o["taken"]:  
-            status = f"✅ مقبوطة ({o['taken_by']})"  
+            # طلبية مقبوطة: مربع أزرق + سمية الليفرور
+            status_line = f"🟦 *[#{o['number']}]* 🕒 {o['time']} 👤 {o['taken_by']}"
         else:  
-            status = "⏳ مازال ما تقبطات"  
-        msg += f"#{o['number']} [{o['time']}] {status} — {o['text']}\n"  
+            # طلبية مازال خاوية: مربع برتقالي
+            status_line = f"🟧 *[#{o['number']}]* 🕒 {o['time']}"
+            
+        msg += f"{status_line}\n"
+        msg += f"📝 {o['text']}\n"
+        
+        # خط فاصل بين الطلبيات
+        if i < len(all_orders) - 1:
+            msg += "────────────────\n"
+            
+    msg += "━━━━━━━━━━━━━━━"  
 
     await update.message.reply_text(msg, parse_mode="Markdown")
 
