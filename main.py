@@ -17,7 +17,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL environment variable is not set")
 
-# 🔑 ساروت Groq المجاني الجديد عوض OpenAI
+# 🔑 ساروت Groq المجاني
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY") 
 
 # 🚨 الـ IDs ديال الأدمنز
@@ -223,7 +223,7 @@ async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await process_order_text(text, context, update.message)
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """مستقبل الصوت المجاني باستعمال Groq Whisper"""
+    """مستقبل الصوت المجاني باستعمال Groq Whisper مع توجيه ذكي للدارجة وتصحيح الأخطاء"""
     if update.effective_chat.type != "private":
         return
 
@@ -236,19 +236,20 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ مفتاح GROQ_API_KEY غير مبرمج ف السيرفر د Render.")
         return
 
-    status_msg = await update.message.reply_text("🎙️ (Groq) جاري تحويل الأوديو لطلب...")
+    status_msg = await update.message.reply_text("🎙️ (Groq) جاري تحويل الأوديو لطلب وتصحيح الكلمات...")
 
     try:
         voice_file = await context.bot.get_file(update.message.voice.file_id)
         file_path = "voice_order.ogg"
         await voice_file.download_to_drive(file_path)
 
-        # الاتصال بـ سيرفر Groq الفابور والسريع
+        # الاتصال بـ سيرفر Groq الفابور والسريع مع إضافة الـ prompt لمنع الأخطاء الإملائية
         headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
         with open(file_path, "rb") as f:
             files = {
                 "file": (file_path, f, "audio/ogg"), 
-                "model": (None, "whisper-large-v3")  # نموذج قوي جداً ومجاني للدارجة
+                "model": (None, "whisper-large-v3"),
+                "prompt": (None, "هذا تسجيل صوتي بالدارجة المغربية لطلب توصيل (كومند). يحتوي على أسماء مدن وأحياء مغربية مثل كازا، الرباط، المعاريف، سيدي معروف، عين الشق، وأرقام هواتف وأثمنة بالدرهم. يرجى كتابته بدقة وبدون أخطاء إملائية.")
             }
             response = requests.post("https://api.groq.com/openai/v1/audio/transcriptions", headers=headers, files=files)
         
@@ -446,7 +447,7 @@ async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🗑️ تم تصفير الطلبيات والنقاط بنجاح.")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 أهلاً بيك ف بوت إدارة الطلبيات المجاني بـ Groq! صيفط أوديو ديريكت دابا لتجربة السيستيم.")
+    await update.message.reply_text("👋 أهلاً بيك ف بوت إدارة الطلبيات المجاني بـ Groq! صيفط أوديو ديريكت دابا لتجربة السيستيم المحدث.")
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
@@ -464,6 +465,6 @@ app.add_handler(CallbackQueryHandler(button))
 
 app.add_handler(MessageHandler(filters.VOICE, handle_voice))
 
-print("✅ Bot running with Groq...")
+print("✅ Bot running with Groq Prompt...")
 PORT = int(os.environ.get("PORT", 8080))
 app.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"https://renderteset-1.onrender.com/{TOKEN}")
