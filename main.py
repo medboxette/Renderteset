@@ -157,28 +157,22 @@ def db_clear_specific_order(group_msg_id: int):
 
 # ── Keyboards ─────────────────────────────────────────────────────────────────
 
-def build_keyboard(taken: bool, phones_str: str = None):
+def build_keyboard(taken: bool):
     if not taken:
         return InlineKeyboardMarkup([[InlineKeyboardButton("خديتها 🚚", callback_data="take")]])
         
-    buttons = [
+    # رجعنا الكيبورد نظيف جداً فيه فقط تليفرات ولغيتها، وحيدنا أزرار الاتصال اللي كتعمل مشاكل
+    return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🏁 تليفرات", callback_data="done"),
             InlineKeyboardButton("❌ لغيتها", callback_data="cancel"),
         ]
-    ]
-    
-    # 📞 الأزرار غاتبقى أزرار عادية (Callback) باش ما تبلوكاوش، ولكن غانطلعو النمرة ف تنبيه سريع (Alert) بلا ميساجات جديدة!
-    if phones_str:
-        phones = phones_str.split(",")
-        for i, p in enumerate(phones):
-            clean_p = p.strip()
-            if not clean_p:
-                continue
-            btn_text = "📞 إظهار رقم الكليان" if len(phones) == 1 else f"📞 إظهار الرقم {i+1}"
-            buttons.append([InlineKeyboardButton(btn_text, callback_data=f"show_{clean_p}")])
-        
-    return InlineKeyboardMarkup(buttons)
+    ])
+
+def escape_markdown_v2(text: str) -> str:
+    # دالة لتنظيف النص وتفادي أخطاء الـ Markdown ف تيليغرام
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    return re.sub(r'([%s])' % re.escape(escape_chars), r'\\\1', text)
 
 # ── Handlers ──────────────────────────────────────────────────────────────────
 
@@ -231,13 +225,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_id = query.message.message_id  
     data = query.data
 
-    # 📱 هنا الحل السحري: ملي يبرك على زر الرقم، غايطلع ليه تنبيه (Alert) فيه النمرة وسط الشاشة بلا ما يرسل أي رسالة!
-    if data.startswith("show_"):
-        phone_num = data.split("_")[1]
-        # كيرجع التنبيه مباشرة ف شاشة الليفرور ونقدروا نخليوه ينسخها بسهولة
-        await query.answer(text=f"📱 رقم الكليان هو:\n{phone_num}\n\n(تقدر تنقلو وتعيط ديريكت)", show_alert=True)
-        return
-
     order = db_get_order(msg_id)
 
     if not order:  
@@ -249,12 +236,26 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ هاد الطلبية خداها شي واحد آخر", show_alert=True)  
             return  
 
+        # 📞 تحويل الأرقام ف الميساج لروابط زرقاء مباشرة قابلة للضغط
+        formatted_text = order['text']
+        if order.get("phone"):
+            phones = order["phone"].split(",")
+            for p in phones:
+                clean_p = p.strip()
+                if clean_p:
+                    # هنا كيرجع الرقم عبارة عن رابط اتصال مباشر وسط النص
+                    formatted_text = formatted_text.replace(clean_p, f"[{clean_p}](tel:{clean_p})")
+
+        # تجهيز النص النهائي بصيغة MarkdownV2 آمنة
+        escaped_title = escape_markdown_v2(f"✅ خديتيها بنجاح:\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 تفاصيل الطلبية:\n\n")
+        final_text = escaped_title + formatted_text # نترك تفاصيل الكومند كيف كتبها الأدمن بدون تغيير لتشتغل روابط tel:
+
         try:
-            # كنرسلو الميساج الأصلي للخاص مع الأزرار الجديدة
             private_msg = await context.bot.send_message(
                 chat_id=user_id,
-                text=f"✅ خديتيها بنجاح:\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 تفاصيل الطلبية:\n\n{order['text']}",
-                reply_markup=build_keyboard(taken=True, phones_str=order.get("phone"))
+                text=final_text,
+                parse_mode="Markdown",
+                reply_markup=build_keyboard(taken=True)
             )
         except Exception as e:
             print(f"Error sending private message: {e}")
@@ -448,4 +449,3 @@ app.add_handler(CallbackQueryHandler(button))
 print("✅ Bot running...")
 PORT = int(os.environ.get("PORT", 8080))
 app.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"https://renderteset-1.onrender.com/{TOKEN}")
-                
