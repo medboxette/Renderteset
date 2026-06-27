@@ -1,4 +1,3 @@
-        
 import os
 import re
 import psycopg2
@@ -43,7 +42,6 @@ def init_db():
                 phone       TEXT
             )
             """)
-            # تعديل لضمان وجود عمود الهاتف في قاعدة البيانات
             try:
                 cur.execute("ALTER TABLE orders ADD COLUMN phone TEXT")
             except Exception:
@@ -160,7 +158,6 @@ def db_clear_specific_order(group_msg_id: int):
 # ── Keyboards ─────────────────────────────────────────────────────────────────
 
 def build_keyboard(taken: bool, phone: str = None):
-    # زر أخذ الطلبية الأساسي في الجروب
     if not taken:
         return InlineKeyboardMarkup([[InlineKeyboardButton("خديتها 🚚", callback_data="take")]])
         
@@ -171,9 +168,8 @@ def build_keyboard(taken: bool, phone: str = None):
         ]
     ]
     
-    # إذا كاين رقم هاتف، نزيدو أزرار الإتصال والواتساب لليفرور ف الخاص
+    # زر الواتساب الاحترافي (مضمون ومقبول ف تيليجرام)
     if phone:
-        # تنظيف النمرة باش تولي بصيغة دولية للواتساب (+212)
         clean_phone = phone.strip()
         if clean_phone.startswith("0"):
             whatsapp_phone = "212" + clean_phone[1:]
@@ -181,7 +177,6 @@ def build_keyboard(taken: bool, phone: str = None):
             whatsapp_phone = clean_phone
             
         buttons.append([
-            InlineKeyboardButton("📞 إتصال هاتفي", url=f"tel:{clean_phone}"),
             InlineKeyboardButton("💬 مراسلة واتساب", url=f"https://wa.me/{whatsapp_phone}")
         ])
         
@@ -198,7 +193,7 @@ async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ خاصك تكتب معلومات الطلبية بعد /cmd")
         return
 
-    # استخراج رقم الهاتف (كيبدا بـ 06 أو 07 أو 05 وتابعينه 8 د الأرقام)
+    # التقاط أول رقم هاتف كيبدا بـ 06 أو 07 أو 05
     phone_match = re.search(r'(0[567]\d{8})', text)
     phone = phone_match.group(1) if phone_match else None
 
@@ -252,7 +247,9 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=f"✅ خديتيها بنجاح:\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 تفاصيل الطلبية:\n\n{order['text']}",
                 reply_markup=build_keyboard(taken=True, phone=order.get("phone"))
             )
-        except Exception:
+        except Exception as e:
+            # إيلا طرا أي مشكل حقيقي ف الإرسال كيبان هنا ف السيرفر
+            print(f"Error sending private message: {e}")
             await query.answer("⚠️ خاصك ضروري تدخل عند البوت ف الخاص ودير /start عاد تقدر تاخد الطلبيات!", show_alert=True)
             return
 
@@ -322,7 +319,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             new_group_msg = await context.bot.send_message(
                 chat_id=GROUP_CHAT_ID,
-                text=f"🔄 (رجعات خاوية) طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 الطلبية:\n\n{order['text']}",
+                text=f"🔄 (رجعات خاوية) طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 الطلبية:\n\n{text}",
                 reply_markup=build_keyboard(taken=False)
             )
             db_clear_specific_order(msg_id)
@@ -338,7 +335,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_message(
                     chat_id=admin_id,
-                    text=f"❌ *إشعار جديد:*\nالطلبية *#{order['number']}* تلغات من طرف *{taken_by}* ورجعات للجروب خاوية.",
+                    text=f"❌ *إشعار جديد:*\nالطلبية *#{order['number']}* telgat mon taraf *{taken_by}*.",
                     parse_mode="Markdown"
                 )
             except Exception as e:
