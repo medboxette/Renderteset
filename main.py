@@ -168,17 +168,16 @@ def build_keyboard(taken: bool, phones_str: str = None):
         ]
     ]
     
-    # 📞 صنع أزرار اتصال مباشرة عبر الهاتف باستخدام رابط tel:
+    # هنا غانديروا زر عادي (Callback) كيرسل الأمر للبوت باش نتحاشاو حظر روابط tel:
     if phones_str:
         phones = phones_str.split(",")
         for i, p in enumerate(phones):
             clean_p = p.strip()
             if not clean_p:
                 continue
-            
-            # إيلا كان رقم واحد غايتسمى "اتصال بالكليان"، وإيلا كانوا جوج غايتسموا "اتصال بالرقم 1" و "اتصال بالرقم 2"
-            btn_text = "📞 اتصال بالكليان" if len(phones) == 1 else f"📞 اتصال بالرقم {i+1} ({clean_p})"
-            buttons.append([InlineKeyboardButton(btn_text, url=f"tel:{clean_p}")])
+            btn_text = "📞 اتصل بالكليان" if len(phones) == 1 else f"📞 اتصل بالرقم {i+1}"
+            # صيفطنا النمرة ف الـ callback_data باش البوت يتعامل معاها
+            buttons.append([InlineKeyboardButton(btn_text, callback_data=f"call_{clean_p}")])
         
     return InlineKeyboardMarkup(buttons)
 
@@ -197,7 +196,6 @@ async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ خاصك تكتب معلومات الطلبية بعد /cmd")
         return
 
-    # استخراج أرقام الهواتف لحفظها ف قاعدة البيانات باش نصاوبوا بيها أزرار الاتصال
     found_phones = re.findall(r'(0[567]\d{8})', text)
     phones_str = ",".join(found_phones) if found_phones else None
 
@@ -233,6 +231,18 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     msg_id = query.message.message_id  
     data = query.data
+
+    # 📞 التعامل مع زر الاتصال ملي يبرك عليه الليفرور
+    if data.startswith("call_"):
+        phone_num = data.split("_")[1]
+        # صيفطنا ليه النمرة كـ رابط نصي (Markdown) تليغرام كيقبلو وكيدوز للاتصال ف البلاصة
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=f"📱 اضغط على الرقم للاتصال المباشر:\n👉 tg://user?id={phone_num} \n\nأو إضغط هنا: \n[📞 اتصل دابا بـ {phone_num}](tel:{phone_num})",
+            parse_mode="Markdown"
+        )
+        await query.answer("✅ تم إرسال رابط الاتصال بالرقم!")
+        return
 
     order = db_get_order(msg_id)
 
