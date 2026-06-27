@@ -161,18 +161,12 @@ def build_keyboard(taken: bool):
     if not taken:
         return InlineKeyboardMarkup([[InlineKeyboardButton("خديتها 🚚", callback_data="take")]])
         
-    # رجعنا الكيبورد نظيف جداً فيه فقط تليفرات ولغيتها، وحيدنا أزرار الاتصال اللي كتعمل مشاكل
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🏁 تليفرات", callback_data="done"),
             InlineKeyboardButton("❌ لغيتها", callback_data="cancel"),
         ]
     ])
-
-def escape_markdown_v2(text: str) -> str:
-    # دالة لتنظيف النص وتفادي أخطاء الـ Markdown ف تيليغرام
-    escape_chars = r'_*[]()~`>#+-=|{}.!'
-    return re.sub(r'([%s])' % re.escape(escape_chars), r'\\\1', text)
 
 # ── Handlers ──────────────────────────────────────────────────────────────────
 
@@ -236,26 +230,25 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ هاد الطلبية خداها شي واحد آخر", show_alert=True)  
             return  
 
-        # 📞 تحويل الأرقام ف الميساج لروابط زرقاء مباشرة قابلة للضغط
+        # 🔄 هنا السحر: غانبدلو الرقم لـ +212 باش التيليغرام يرجعو زرق ديريكت بوحدو بدون كود معقد
         formatted_text = order['text']
         if order.get("phone"):
             phones = order["phone"].split(",")
             for p in phones:
                 clean_p = p.strip()
                 if clean_p:
-                    # هنا كيرجع الرقم عبارة عن رابط اتصال مباشر وسط النص
-                    formatted_text = formatted_text.replace(clean_p, f"[{clean_p}](tel:{clean_p})")
+                    # تحويل من 06XXXXXXXX إلى +2126XXXXXXXX
+                    international_phone = "+212" + clean_p[1:]
+                    formatted_text = formatted_text.replace(clean_p, international_phone)
 
-        # تجهيز النص النهائي بصيغة MarkdownV2 آمنة
-        escaped_title = escape_markdown_v2(f"✅ خديتيها بنجاح:\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 تفاصيل الطلبية:\n\n")
-        final_text = escaped_title + formatted_text # نترك تفاصيل الكومند كيف كتبها الأدمن بدون تغيير لتشتغل روابط tel:
+        # ميساج عادي ونقي بزاف
+        final_text = f"✅ خديتيها بنجاح:\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
 
         try:
             private_msg = await context.bot.send_message(
                 chat_id=user_id,
                 text=final_text,
-                parse_mode="Markdown",
-                reply_markup=build_keyboard(taken=True)
+                reply_markup=build_keyboard(taken=True) # حيدنا الـ parse_mode نهائياً باش ما يتخربقش الميساج
             )
         except Exception as e:
             print(f"Error sending private message: {e}")
@@ -347,50 +340,30 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 print(f"Error sending admin notification: {e}")
 
-# 📊 لائحة الطلبيات
+# ... (باقي الدوال كتبقى كيفما هي)
 async def list_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     all_orders = db_get_all_orders()
     if not all_orders:
         await update.message.reply_text("📋 ما كاين حتى طلبية دابا!")
         return
-
-    msg = "📋 لائحة الطلبيات اليومية\n"
-    msg += "━━━━━━━━━━━━━━━\n"
-    
+    msg = "📋 لائحة الطلبيات اليومية\n━━━━━━━━━━━━━━━\n"
     for i, o in enumerate(all_orders):  
-        if o["done"]:  
-            status_line = f"🟩 [#{o['number']}] 🕒 {o['time']}"
-        elif o["taken"]:  
-            status_line = f"🟦 [#{o['number']}] 🕒 {o['time']} 👤 قيد التوصيل ({o['taken_by']})"
-        else:  
-            status_line = f"🟧 [#{o['number']}] 🕒 {o['time']}"
-            
-        msg += f"{status_line}\n"
-        msg += f"📝 {o['text']}\n"
-        
-        if i < len(all_orders) - 1:
-            msg += "────────────────\n"
-            
+        status_line = f"🟩 [#{o['number']}] 🕒 {o['time']}" if o["done"] else (f"🟦 [#{o['number']}] 🕒 {o['time']} 👤 قيد التوصيل ({o['taken_by']})" if o["taken"] else f"🟧 [#{o['number']}] 🕒 {o['time']}")
+        msg += f"{status_line}\n📝 {o['text']}\n"
+        if i < len(all_orders) - 1: msg += "────────────────\n"
     msg += "━━━━━━━━━━━━━━━"  
-
     await update.message.reply_text(msg)
 
 async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_name = update.effective_user.first_name
-
     all_orders = db_get_all_orders()  
     mine = [o for o in all_orders if o["taken_by_id"] == user_id]  
-
     if not mine:  
         await update.message.reply_text("📭 ما واخد حتى طلبية دابا.")  
         return  
-
     msg = f"📦 الطلبيات ديال {user_name}:\n\n"  
-    for o in mine:  
-        status = "🏁 تليفرات" if o["done"] else "✅ قيد التوصيل"  
-        msg += f"#{o['number']} [{o['time']}] {status} — {o['text']}\n"  
-
+    for o in mine: msg += f"#{o['number']} [{o['time']}] {'🏁 تليفرات' if o['done'] else '✅ قيد التوصيل'} — {o['text']}\n"  
     await update.message.reply_text(msg)
 
 async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -398,44 +371,27 @@ async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not all_scores:
         await update.message.reply_text("🏆 ما كاين حتى واحد خدا شي طلبية!")
         return
-
     msg = "🏆 لائحة المتصدرين:\n\n"  
     medals = ["🥇", "🥈", "🥉"]  
-
     for i, (username, score) in enumerate(all_scores):  
-        medal = medals[i] if i < 3 else f"{i+1}."  
-        msg += f"{medal} {username} — {score} طلبية\n"  
-
+        msg += f"{medals[i] if i < 3 else f'{i+1}.'} {username} — {score} طلبية\n"  
     await update.message.reply_text(msg)
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     s = db_get_stats()
-    today = datetime.now().strftime("%d/%m/%Y")
-    msg = (
-        f"📊 إحصائيات الطلبيات — {today}\n\n"
-        f"📦 المجموع: {s['total']}\n"
-        f"🏁 تليفرات: {s['done']}\n"
-        f"✅ جارية: {s['in_progress']}\n"
-        f"⏳ مازال ما تشدات: {s['waiting']}"
-    )
-    await update.message.reply_text(msg)
+    await update.message.reply_text(f"📊 إحصائيات الطلبيات — {datetime.now().strftime('%d/%m/%Y')}\n\n📦 المجموع: {s['total']}\n🏁 تليفرات: {s['done']}\n✅ جارية: {s['in_progress']}\n⏳ مازال ما تشدات: {s['waiting']}")
 
 async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in ADMIN_IDS:
+    if update.effective_user.id not in ADMIN_IDS:
         await update.message.reply_text("❌ هاد الأمر مخصص للأدمن فقط.")
         return
-
     db_clear_all()  
     await update.message.reply_text("🗑️ تم تصفير الطلبيات والنقاط بنجاح.")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 أهلاً بيك ف بوت إدارة الطلبيات!")
 
-# ── Main ──────────────────────────────────────────────────────────────────────
-
 init_db()
-
 app = ApplicationBuilder().token(TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("cmd", cmd))
