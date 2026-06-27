@@ -4,7 +4,7 @@ import psycopg2
 import psycopg2.extras
 from datetime import datetime
 
-# مكتبات إضافية للصوت والذكاء الاصطناعي
+# مكتبات إضافية للصوت والاتصال بـ Groq
 import requests
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
@@ -17,7 +17,8 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL environment variable is not set")
 
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") # مفتاح الـ API لتحويل الصوت
+# 🔑 ساروت Groq المجاني الجديد عوض OpenAI
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY") 
 
 # 🚨 الـ IDs ديال الأدمنز
 ADMIN_IDS = [6243248782, 8373828587]
@@ -172,10 +173,9 @@ def build_keyboard(taken: bool):
         ]
     ])
 
-# ── Voice Function ────────────────────────────────────────────────────────────
+# ── Function ────────────────────────────────────────────────────────────
 
 async def process_order_text(text: str, context: ContextTypes.DEFAULT_TYPE, message_obj):
-    """دالة موحدة لمعالجة النص وإرساله للجروب سواء دخل كتابة أو صوت"""
     found_phones = re.findall(r'(?:\+212|0)[ \-_]*[567](?:[ \-_]*\d){8}', text)
     phones_str = ",".join(found_phones) if found_phones else None
 
@@ -223,7 +223,7 @@ async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await process_order_text(text, context, update.message)
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """مستقبل الرسائل الصوتية من الأدمنز"""
+    """مستقبل الصوت المجاني باستعمال Groq Whisper"""
     if update.effective_chat.type != "private":
         return
 
@@ -232,25 +232,26 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ هاد الميزة متاحة للأدمنز فقط.")
         return
 
-    if not OPENAI_API_KEY:
-        await update.message.reply_text("⚠️ مفتاح الذكاء الاصطناعي للصوت OPENAI_API_KEY غير مبرمج ف السيرفر.")
+    if not GROQ_API_KEY:
+        await update.message.reply_text("⚠️ مفتاح GROQ_API_KEY غير مبرمج ف السيرفر د Render.")
         return
 
-    status_msg = await update.message.reply_text("🎙️ جاري الاستماع للأوديو وتحويله لطلب...")
+    status_msg = await update.message.reply_text("🎙️ (Groq) جاري تحويل الأوديو لطلب...")
 
     try:
-        # تحميل ملف الأوديو من تيليغرام
         voice_file = await context.bot.get_file(update.message.voice.file_id)
         file_path = "voice_order.ogg"
         await voice_file.download_to_drive(file_path)
 
-        # إرسال الملف لـ OpenAI Whisper للاستخراج الذكي (يفهم الدارجة بشكل ممتاز)
-        headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
+        # الاتصال بـ سيرفر Groq الفابور والسريع
+        headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
         with open(file_path, "rb") as f:
-            files = {"file": (file_path, f, "audio/ogg"), "model": (None, "whisper-1")}
-            response = requests.post("https://api.openai.com/v1/audio/transcriptions", headers=headers, files=files)
+            files = {
+                "file": (file_path, f, "audio/ogg"), 
+                "model": (None, "whisper-large-v3")  # نموذج قوي جداً ومجاني للدارجة
+            }
+            response = requests.post("https://api.groq.com/openai/v1/audio/transcriptions", headers=headers, files=files)
         
-        # مسح الملف المؤقت
         if os.path.exists(file_path):
             os.remove(file_path)
 
@@ -264,7 +265,6 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await status_msg.edit_text("⚠️ ما سمعت والو! جرب تسجل أوديو بصوت أوضح.")
             return
 
-        # إعلام الأدمن بالنص اللي تهمتو المكينة وصناعة الطلبية تلقائياً
         await status_msg.edit_text(f"📝 النص المستخرج:\n\"{transcribed_text}\"")
         await process_order_text(transcribed_text, context, update.message)
 
@@ -446,7 +446,7 @@ async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🗑️ تم تصفير الطلبيات والنقاط بنجاح.")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 أهلاً بيك ف بوت إدارة الطلبيات! تقدر دابا تصيفط أوديو ديريكت باش تصاوب كومند.")
+    await update.message.reply_text("👋 أهلاً بيك ف بوت إدارة الطلبيات المجاني بـ Groq! صيفط أوديو ديريكت دابا لتجربة السيستيم.")
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
@@ -462,9 +462,8 @@ app.add_handler(CommandHandler("stats", stats))
 app.add_handler(CommandHandler("clear", clear))
 app.add_handler(CallbackQueryHandler(button))
 
-# إضافة مستقبل الرسائل الصوتية (Voice Messages)
 app.add_handler(MessageHandler(filters.VOICE, handle_voice))
 
-print("✅ Bot running...")
+print("✅ Bot running with Groq...")
 PORT = int(os.environ.get("PORT", 8080))
 app.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"https://renderteset-1.onrender.com/{TOKEN}")
