@@ -4,8 +4,10 @@ import psycopg2
 import psycopg2.extras
 from datetime import datetime
 
+# مكتبات إضافية للصوت والذكاء الاصطناعي
+import requests
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
 TOKEN = os.environ.get("BOT_TOKEN")
 if not TOKEN:
@@ -14,6 +16,8 @@ if not TOKEN:
 DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL environment variable is not set")
+
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") # مفتاح الـ API لتحويل الصوت
 
 # 🚨 الـ IDs ديال الأدمنز
 ADMIN_IDS = [6243248782, 8373828587]
@@ -168,6 +172,39 @@ def build_keyboard(taken: bool):
         ]
     ])
 
+# ── Voice Function ────────────────────────────────────────────────────────────
+
+async def process_order_text(text: str, context: ContextTypes.DEFAULT_TYPE, message_obj):
+    """دالة موحدة لمعالجة النص وإرساله للجروب سواء دخل كتابة أو صوت"""
+    found_phones = re.findall(r'(?:\+212|0)[ \-_]*[567](?:[ \-_]*\d){8}', text)
+    phones_str = ",".join(found_phones) if found_phones else None
+
+    counter = db_increment_counter()  
+    now = datetime.now().strftime("%H:%M")  
+
+    try:
+        group_msg = await context.bot.send_message(
+            chat_id=GROUP_CHAT_ID,
+            text=f"🔢 طلبية #{counter}\n🕒 {now}\n\n📦 طلبية جديدة:\n\n{text}",
+            reply_markup=build_keyboard(taken=False),
+        )
+    except Exception as e:
+        await message_obj.reply_text(f"❌ فشل إرسال الطلبية للجروب.\nError: {e}")
+        return
+
+    await message_obj.reply_text(f"✅ تم إرسال الطلبية #{counter} بنجاح إلى الجروب.")
+
+    db_save_order(group_msg.message_id, {  
+        "number": counter,  
+        "text": text,  
+        "time": now,  
+        "taken": False,  
+        "done": False,  
+        "taken_by": None,  
+        "taken_by_id": None,  
+        "phone": phones_str
+    })
+
 # ── Handlers ──────────────────────────────────────────────────────────────────
 
 async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -183,35 +220,56 @@ async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ خاصك تكتب معلومات الطلبية بعد /cmd")
         return
 
-    # التقاط الأرقام بمرونة حتى لو كانت متباعدة أو فيها عوارض
-    found_phones = re.findall(r'(?:\+212|0)[ \-_]*[567](?:[ \-_]*\d){8}', text)
-    phones_str = ",".join(found_phones) if found_phones else None
+    await process_order_text(text, context, update.message)
 
-    counter = db_increment_counter()  
-    now = datetime.now().strftime("%H:%M")  
-
-    try:
-        group_msg = await context.bot.send_message(
-            chat_id=GROUP_CHAT_ID,
-            text=f"🔢 طلبية #{counter}\n🕒 {now}\n\n📦 طلبية جديدة:\n\n{text}",
-            reply_markup=build_keyboard(taken=False),
-        )
-    except Exception as e:
-        await update.message.reply_text(f"❌ فشل إرسال الطلبية للجروب.\nError: {e}")
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """مستقبل الرسائل الصوتية من الأدمنز"""
+    if update.effective_chat.type != "private":
         return
 
-    await update.message.reply_text(f"✅ تم إرسال الطلبية #{counter} بنجاح إلى الجروب.")
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ هاد الميزة متاحة للأدمنز فقط.")
+        return
 
-    db_save_order(group_msg.message_id, {  
-        "number": counter,  
-        "text": text,  
-        "time": now,  
-        "taken": False,  
-        "done": False,  
-        "taken_by": None,  
-        "taken_by_id": None,  
-        "phone": phones_str
-    })
+    if not OPENAI_API_KEY:
+        await update.message.reply_text("⚠️ مفتاح الذكاء الاصطناعي للصوت OPENAI_API_KEY غير مبرمج ف السيرفر.")
+        return
+
+    status_msg = await update.message.reply_text("🎙️ جاري الاستماع للأوديو وتحويله لطلب...")
+
+    try:
+        # تحميل ملف الأوديو من تيليغرام
+        voice_file = await context.bot.get_file(update.message.voice.file_id)
+        file_path = "voice_order.ogg"
+        await voice_file.download_to_drive(file_path)
+
+        # إرسال الملف لـ OpenAI Whisper للاستخراج الذكي (يفهم الدارجة بشكل ممتاز)
+        headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
+        with open(file_path, "rb") as f:
+            files = {"file": (file_path, f, "audio/ogg"), "model": (None, "whisper-1")}
+            response = requests.post("https://api.openai.com/v1/audio/transcriptions", headers=headers, files=files)
+        
+        # مسح الملف المؤقت
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+        if response.status_code != 200:
+            await status_msg.edit_text(f"❌ مشكل ف السيرفر د الصوت: {response.text}")
+            return
+
+        transcribed_text = response.json().get("text", "").strip()
+
+        if not transcribed_text:
+            await status_msg.edit_text("⚠️ ما سمعت والو! جرب تسجل أوديو بصوت أوضح.")
+            return
+
+        # إعلام الأدمن بالنص اللي تهمتو المكينة وصناعة الطلبية تلقائياً
+        await status_msg.edit_text(f"📝 النص المستخرج:\n\"{transcribed_text}\"")
+        await process_order_text(transcribed_text, context, update.message)
+
+    except Exception as e:
+        await status_msg.edit_text(f"❌ خطأ غير متوقع: {e}")
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -231,22 +289,16 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ هاد الطلبية خداها شي واحد آخر", show_alert=True)  
             return  
 
-        # 🔄 تنظيف وتحويل الأرقام المخربقة لروابط مجمعة ونقية للتيليغرام
         formatted_text = order['text']
-        
-        # البحث عن كاع الأرقام اللي تسيفتات ف النص الأصلي
         raw_phones = re.findall(r'(?:\+212|0)[ \-_]*[567](?:[ \-_]*\d){8}', formatted_text)
         
         for p in raw_phones:
-            # تنظيف الرقم تماماً من الفراغات والعوارض
             clean_digits = re.sub(r'[\s\-_]', '', p)
             if clean_digits.startswith('+212'):
                 clean_digits = '0' + clean_digits[4:]
                 
             if len(clean_digits) == 10 and clean_digits.startswith('0'):
-                # بناء الرقم بصيغة دولية مجمعة ومثالية للضغط ديريكت
                 international_phone = "+212" + clean_digits[1:]
-                # استبدال الصيغة القديمة (بالفراغات) بالجديدة المنظفة
                 formatted_text = formatted_text.replace(p, international_phone)
 
         final_text = f"✅ خديتيها بنجاح:\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
@@ -277,7 +329,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.answer("✅ خديتي الطلبية! شوف الخاص ديالك.")  
 
-        # 🔔 إشعار للأدمنز
         for admin_id in ADMIN_IDS:
             try:
                 await context.bot.send_message(
@@ -300,7 +351,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )  
         await query.answer("✅ تم تأكيد التوصيل")  
 
-        # 🔔 إشعار للأدمنز
         for admin_id in ADMIN_IDS:
             try:
                 await context.bot.send_message(
@@ -337,7 +387,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.delete()
         await query.answer("❌ تم الإلغاء، الطلبية رجعات للجروب.")
 
-        # 🔔 إشعار للأدمنز
         for admin_id in ADMIN_IDS:
             try:
                 await context.bot.send_message(
@@ -347,38 +396,31 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 print(f"Error sending admin notification: {e}")
 
-# ── باقي الأوامر الإحصائية ──────────────────────────────────────────────────────
+# ── باقي الأوامر ──────────────────────────────────────────────────────────────
 
 async def list_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     all_orders = db_get_all_orders()
     if not all_orders:
         await update.message.reply_text("📋 ما كاين حتى طلبية دابا!")
         return
-
     msg = "📋 لائحة الطلبيات اليومية\n━━━━━━━━━━━━━━━\n"
     for i, o in enumerate(all_orders):  
         status_line = f"🟩 [#{o['number']}] 🕒 {o['time']}" if o["done"] else (f"🟦 [#{o['number']}] 🕒 {o['time']} 👤 قيد التوصيل ({o['taken_by']})" if o["taken"] else f"🟧 [#{o['number']}] 🕒 {o['time']}")
         msg += f"{status_line}\n📝 {o['text']}\n"
-        if i < len(all_orders) - 1:
-            msg += "────────────────\n"
+        if i < len(all_orders) - 1: msg += "────────────────\n"
     msg += "━━━━━━━━━━━━━━━"  
     await update.message.reply_text(msg)
 
 async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_name = update.effective_user.first_name
-
     all_orders = db_get_all_orders()  
     mine = [o for o in all_orders if o["taken_by_id"] == user_id]  
-
     if not mine:  
         await update.message.reply_text("📭 ما واخد حتى طلبية دابا.")  
         return  
-
     msg = f"📦 الطلبيات ديال {user_name}:\n\n"  
-    for o in mine:  
-        msg += f"#{o['number']} [{o['time']}] {'🏁 تليفرات' if o['done'] else '✅ قيد التوصيل'} — {o['text']}\n"  
-
+    for o in mine: msg += f"#{o['number']} [{o['time']}] {'🏁 تليفرات' if o['done'] else '✅ قيد التوصيل'} — {o['text']}\n"  
     await update.message.reply_text(msg)
 
 async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -386,30 +428,25 @@ async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not all_scores:
         await update.message.reply_text("🏆 ما كاين حتى واحد خدا شي طلبية!")
         return
-
     msg = "🏆 لائحة المتصدرين:\n\n"  
     medals = ["🥇", "🥈", "🥉"]  
     for i, (username, score) in enumerate(all_scores):  
         msg += f"{medals[i] if i < 3 else f'{i+1}.'} {username} — {score} طلبية\n"  
-
     await update.message.reply_text(msg)
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     s = db_get_stats()
-    today = datetime.now().strftime("%d/%m/%Y")
-    msg = f"📊 إحصائيات الطلبيات — {today}\n\n📦 المجموع: {s['total']}\n🏁 تليفرات: {s['done']}\n✅ جارية: {s['in_progress']}\n⏳ مازال ما تشدات: {s['waiting']}"
-    await update.message.reply_text(msg)
+    await update.message.reply_text(f"📊 إحصائيات الطلبيات — {datetime.now().strftime('%d/%m/%Y')}\n\n📦 المجموع: {s['total']}\n🏁 تليفرات: {s['done']}\n✅ جارية: {s['in_progress']}\n⏳ مازال ما تشدات: {s['waiting']}")
 
 async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         await update.message.reply_text("❌ هاد الأمر مخصص للأدمن فقط.")
         return
-
     db_clear_all()  
     await update.message.reply_text("🗑️ تم تصفير الطلبيات والنقاط بنجاح.")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 أهلاً بيك ف بوت إدارة الطلبيات!")
+    await update.message.reply_text("👋 أهلاً بيك ف بوت إدارة الطلبيات! تقدر دابا تصيفط أوديو ديريكت باش تصاوب كومند.")
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
@@ -424,6 +461,9 @@ app.add_handler(CommandHandler("top", top))
 app.add_handler(CommandHandler("stats", stats))
 app.add_handler(CommandHandler("clear", clear))
 app.add_handler(CallbackQueryHandler(button))
+
+# إضافة مستقبل الرسائل الصوتية (Voice Messages)
+app.add_handler(MessageHandler(filters.VOICE, handle_voice))
 
 print("✅ Bot running...")
 PORT = int(os.environ.get("PORT", 8080))
