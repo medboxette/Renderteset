@@ -15,10 +15,10 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL environment variable is not set")
 
-# 🚨 الـ IDs ديالك وديال خوك كأدمن بجوج
+# 🚨 الـ IDs ديال الأدمنز
 ADMIN_IDS = [6243248782, 8373828587]
 
-# 🌐 الـ ID ديال الجروب ديالك
+# 🌐 الـ ID ديال الجروب
 GROUP_CHAT_ID = -1003929375047  
 
 # ── Database ──────────────────────────────────────────────────────────────────
@@ -168,18 +168,17 @@ def build_keyboard(taken: bool, phones_str: str = None):
         ]
     ]
     
-    # صنع أزرار منفصلة لكل رقم هاتف تم العثور عليه
+    # 📞 صنع أزرار اتصال مباشرة عبر الهاتف باستخدام رابط tel:
     if phones_str:
         phones = phones_str.split(",")
         for i, p in enumerate(phones):
             clean_p = p.strip()
             if not clean_p:
                 continue
-            whatsapp_phone = "212" + clean_p[1:] if clean_p.startswith("0") else clean_p
             
-            # إيلا كان رقم واحد غايتسمى "واتساب الكليان"، إيلا كانوا جوج غايتسموا "واتساب 1" و "واتساب 2"
-            btn_text = f"💬 واتساب الكليان" if len(phones) == 1 else f"💬 واتساب {i+1} ({clean_p})"
-            buttons.append([InlineKeyboardButton(btn_text, url=f"https://wa.me/{whatsapp_phone}")])
+            # إيلا كان رقم واحد غايتسمى "اتصال بالكليان"، وإيلا كانوا جوج غايتسموا "اتصال بالرقم 1" و "اتصال بالرقم 2"
+            btn_text = "📞 اتصال بالكليان" if len(phones) == 1 else f"📞 اتصال بالرقم {i+1} ({clean_p})"
+            buttons.append([InlineKeyboardButton(btn_text, url=f"tel:{clean_p}")])
         
     return InlineKeyboardMarkup(buttons)
 
@@ -189,22 +188,17 @@ async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != "private":
         return
 
-    text = " ".join(context.args)
+    if update.message.text.startswith("/cmd"):
+        text = update.message.text[4:].strip()
+    else:
+        text = update.message.text.strip()
+
     if not text:
         await update.message.reply_text("⚠️ خاصك تكتب معلومات الطلبية بعد /cmd")
         return
 
-    # استخراج جميع أرقام الهواتف من النص
+    # استخراج أرقام الهواتف لحفظها ف قاعدة البيانات باش نصاوبوا بيها أزرار الاتصال
     found_phones = re.findall(r'(0[567]\d{8})', text)
-    
-    # مسح الأرقام من النص باش يبان منظم ونقي ومايخربقش الشوفات
-    for p in found_phones:
-        text = text.replace(p, "").strip()
-    
-    # تنظيف الفراغات الزائدة والأسطر الخاوية اللي بقاو
-    text = re.sub(r'\n+', '\n', text).strip()
-
-    # حفظ الأرقام مفروقين بفاصلة ف قاعدة البيانات
     phones_str = ",".join(found_phones) if found_phones else None
 
     counter = db_increment_counter()  
@@ -282,8 +276,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_message(
                     chat_id=admin_id,
-                    text=f"🚚 *إشعار جديد:*\nالليفرور *{user}* خدا الطلبية *#{order['number']}*\n\n📦 *الطلبية:* {order['text']}",
-                    parse_mode="Markdown"
+                    text=f"🚚 إشعار جديد:\nالليفرور {user} خدا الطلبية #{order['number']}\n\n📦 الطلبية: {order['text']}",
                 )
             except Exception as e:
                 print(f"Error sending admin notification: {e}")
@@ -306,8 +299,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_message(
                     chat_id=admin_id,
-                    text=f"🏁 *إشعار جديد:*\nالطلبية *#{order['number']}* تليفرات بنجاح بواسطة *{order['taken_by']}*! 🎉",
-                    parse_mode="Markdown"
+                    text=f"🏁 إشعار جديد:\nالطلبية #{order['number']} تليفرات بنجاح بواسطة {order['taken_by']}! 🎉",
                 )
             except Exception as e:
                 print(f"Error sending admin notification: {e}")
@@ -344,8 +336,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_message(
                     chat_id=admin_id,
-                    text=f"❌ *إشعار جديد:*\nالطلبية *#{order['number']}* تلغات من طرف *{taken_by}* ورجعات للجروب خاوية.",
-                    parse_mode="Markdown"
+                    text=f"❌ إشعار جديد:\nالطلبية #{order['number']} تلغات من طرف {taken_by} ورجعات للجروب خاوية.",
                 )
             except Exception as e:
                 print(f"Error sending admin notification: {e}")
@@ -357,16 +348,16 @@ async def list_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📋 ما كاين حتى طلبية دابا!")
         return
 
-    msg = "📋 *لائحة الطلبيات اليومية*\n"
+    msg = "📋 لائحة الطلبيات اليومية\n"
     msg += "━━━━━━━━━━━━━━━\n"
     
     for i, o in enumerate(all_orders):  
         if o["done"]:  
-            status_line = f"🟩 *[#{o['number']}]* 🕒 {o['time']}"
+            status_line = f"🟩 [#{o['number']}] 🕒 {o['time']}"
         elif o["taken"]:  
-            status_line = f"🟦 *[#{o['number']}]* 🕒 {o['time']} 👤 قيد التوصيل ({o['taken_by']})"
+            status_line = f"🟦 [#{o['number']}] 🕒 {o['time']} 👤 قيد التوصيل ({o['taken_by']})"
         else:  
-            status_line = f"🟧 *[#{o['number']}]* 🕒 {o['time']}"
+            status_line = f"🟧 [#{o['number']}] 🕒 {o['time']}"
             
         msg += f"{status_line}\n"
         msg += f"📝 {o['text']}\n"
@@ -376,7 +367,7 @@ async def list_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
     msg += "━━━━━━━━━━━━━━━"  
 
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    await update.message.reply_text(msg)
 
 async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -389,12 +380,12 @@ async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📭 ما واخد حتى طلبية دابا.")  
         return  
 
-    msg = f"📦 *الطلبيات ديال {user_name}:*\n\n"  
+    msg = f"📦 الطلبيات ديال {user_name}:\n\n"  
     for o in mine:  
         status = "🏁 تليفرات" if o["done"] else "✅ قيد التوصيل"  
         msg += f"#{o['number']} [{o['time']}] {status} — {o['text']}\n"  
 
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    await update.message.reply_text(msg)
 
 async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
     all_scores = db_get_scores()
@@ -402,14 +393,14 @@ async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🏆 ما كاين حتى واحد خدا شي طلبية!")
         return
 
-    msg = "🏆 *لائحة المتصدرين:*\n\n"  
+    msg = "🏆 لائحة المتصدرين:\n\n"  
     medals = ["🥇", "🥈", "🥉"]  
 
     for i, (username, score) in enumerate(all_scores):  
         medal = medals[i] if i < 3 else f"{i+1}."  
         msg += f"{medal} {username} — {score} طلبية\n"  
 
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    await update.message.reply_text(msg)
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     s = db_get_stats()
@@ -421,7 +412,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ جارية: {s['in_progress']}\n"
         f"⏳ مازال ما تشدات: {s['waiting']}"
     )
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    await update.message.reply_text(msg)
 
 async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -452,4 +443,3 @@ app.add_handler(CallbackQueryHandler(button))
 print("✅ Bot running...")
 PORT = int(os.environ.get("PORT", 8080))
 app.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"https://renderteset-1.onrender.com/{TOKEN}")
-    
