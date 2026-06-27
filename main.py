@@ -1,4 +1,6 @@
+        
 import os
+import re
 import psycopg2
 import psycopg2.extras
 from datetime import datetime
@@ -14,8 +16,8 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL environment variable is not set")
 
-# 🚨 الـ ID ديالك كأدمن باش يجيوك الإشعارات هنا ف الخاص
-ADMIN_IDS = [6243248782,8373828587]
+# 🚨 الـ IDs ديالك وديال خوك كأدمن باش يجيوكم الإشعارات ف الخاص بجوج
+ADMIN_IDS = [6243248782, 8373828587]
 
 # 🌐 الـ ID ديال الجروب ديالك
 GROUP_CHAT_ID = -1003929375047  
@@ -37,9 +39,16 @@ def init_db():
                 taken       BOOLEAN NOT NULL DEFAULT FALSE,
                 done        BOOLEAN NOT NULL DEFAULT FALSE,
                 taken_by    TEXT,
-                taken_by_id BIGINT
+                taken_by_id BIGINT,
+                phone       TEXT
             )
             """)
+            # تعديل لضمان وجود عمود الهاتف في قاعدة البيانات
+            try:
+                cur.execute("ALTER TABLE orders ADD COLUMN phone TEXT")
+            except Exception:
+                conn.rollback()
+            
             cur.execute("""
             CREATE TABLE IF NOT EXISTS scores (
                 username TEXT PRIMARY KEY,
@@ -72,13 +81,14 @@ def db_save_order(group_msg_id: int, order: dict):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-            INSERT INTO orders (group_msg_id, number, text, time, taken, done, taken_by, taken_by_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO orders (group_msg_id, number, text, time, taken, done, taken_by, taken_by_id, phone)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (group_msg_id) DO UPDATE SET
                 taken       = EXCLUDED.taken,
                 done        = EXCLUDED.done,
                 taken_by    = EXCLUDED.taken_by,
-                taken_by_id = EXCLUDED.taken_by_id
+                taken_by_id = EXCLUDED.taken_by_id,
+                phone       = EXCLUDED.phone
             """, (
                 group_msg_id,
                 order["number"],
@@ -88,6 +98,7 @@ def db_save_order(group_msg_id: int, order: dict):
                 order["done"],
                 order["taken_by"],
                 order["taken_by_id"],
+                order.get("phone")
             ))
             conn.commit()
 
@@ -148,17 +159,33 @@ def db_clear_specific_order(group_msg_id: int):
 
 # ── Keyboards ─────────────────────────────────────────────────────────────────
 
-def build_keyboard(taken: bool):
+def build_keyboard(taken: bool, phone: str = None):
+    # زر أخذ الطلبية الأساسي في الجروب
     if not taken:
-        return InlineKeyboardMarkup([
-            [InlineKeyboardButton("قبطتها 🚚", callback_data="take")]
-        ])
-    return InlineKeyboardMarkup([
+        return InlineKeyboardMarkup([[InlineKeyboardButton("خديتها 🚚", callback_data="take")]])
+        
+    buttons = [
         [
             InlineKeyboardButton("🏁 تليفرات", callback_data="done"),
             InlineKeyboardButton("❌ لغيتها", callback_data="cancel"),
         ]
-    ])
+    ]
+    
+    # إذا كاين رقم هاتف، نزيدو أزرار الإتصال والواتساب لليفرور ف الخاص
+    if phone:
+        # تنظيف النمرة باش تولي بصيغة دولية للواتساب (+212)
+        clean_phone = phone.strip()
+        if clean_phone.startswith("0"):
+            whatsapp_phone = "212" + clean_phone[1:]
+        else:
+            whatsapp_phone = clean_phone
+            
+        buttons.append([
+            InlineKeyboardButton("📞 إتصال هاتفي", url=f"tel:{clean_phone}"),
+            InlineKeyboardButton("💬 مراسلة واتساب", url=f"https://wa.me/{whatsapp_phone}")
+        ])
+        
+    return InlineKeyboardMarkup(buttons)
 
 # ── Handlers ──────────────────────────────────────────────────────────────────
 
@@ -170,6 +197,10 @@ async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not text:
         await update.message.reply_text("⚠️ خاصك تكتب معلومات الطلبية بعد /cmd")
         return
+
+    # استخراج رقم الهاتف (كيبدا بـ 06 أو 07 أو 05 وتابعينه 8 د الأرقام)
+    phone_match = re.search(r'(0[567]\d{8})', text)
+    phone = phone_match.group(1) if phone_match else None
 
     counter = db_increment_counter()  
     now = datetime.now().strftime("%H:%M")  
@@ -194,6 +225,7 @@ async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "done": False,  
         "taken_by": None,  
         "taken_by_id": None,  
+        "phone": phone
     })
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -211,17 +243,17 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "take":  
         if order["taken"]:  
-            await query.answer("❌ هاد الطلبية قبطها شي واحد آخر", show_alert=True)  
+            await query.answer("❌ هاد الطلبية خداها شي واحد آخر", show_alert=True)  
             return  
 
         try:
             private_msg = await context.bot.send_message(
                 chat_id=user_id,
-                text=f"✅ قبطتيها بنجاح:\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 تفاصيل الطلبية:\n\n{order['text']}",
-                reply_markup=build_keyboard(taken=True)
+                text=f"✅ خديتيها بنجاح:\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 تفاصيل الطلبية:\n\n{order['text']}",
+                reply_markup=build_keyboard(taken=True, phone=order.get("phone"))
             )
         except Exception:
-            await query.answer("⚠️ خاصك ضروري تدخل عند البوت ف الخاص ودير /start عاد تقدر تقبط الطلبيات!", show_alert=True)
+            await query.answer("⚠️ خاصك ضروري تدخل عند البوت ف الخاص ودير /start عاد تقدر تاخد الطلبيات!", show_alert=True)
             return
 
         order["taken"] = True  
@@ -237,14 +269,14 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             print(f"Error deleting group message: {e}")
 
-        await query.answer("✅ قبطتي الطلبية! شوف الخاص ديالك.")  
+        await query.answer("✅ خديتي الطلبية! شوف الخاص ديالك.")  
 
-        # 🔔 إشعار للأدمن: الطلبية تقبطات
+        # 🔔 إشعار للأدمنز
         for admin_id in ADMIN_IDS:
             try:
                 await context.bot.send_message(
                     chat_id=admin_id,
-                    text=f"🚚 *إشعار جديد:*\nالليفرور *{user}* قبط الطلبية *#{order['number']}*\n\n📦 *الطلبية:* {order['text']}",
+                    text=f"🚚 *إشعار جديد:*\nالليفرور *{user}* خدا الطلبية *#{order['number']}*\n\n📦 *الطلبية:* {order['text']}",
                     parse_mode="Markdown"
                 )
             except Exception as e:
@@ -252,7 +284,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "done":  
         if order["taken_by_id"] != user_id and user_id not in ADMIN_IDS:  
-            await query.answer("❌ غير اللي قبط الطلبية هو اللي يقدر يدير تليفرات", show_alert=True)  
+            await query.answer("❌ غير اللي خدا الطلبية هو اللي يقدر يدير تليفرات", show_alert=True)  
             return  
 
         order["done"] = True  
@@ -263,7 +295,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )  
         await query.answer("✅ تم تأكيد التوصيل")  
 
-        # 🔔 إشعار للأدمن: الطلبية تليفرات
+        # 🔔 إشعار للأدمنز
         for admin_id in ADMIN_IDS:
             try:
                 await context.bot.send_message(
@@ -276,7 +308,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "cancel":  
         if order["taken_by_id"] != user_id and user_id not in ADMIN_IDS:  
-            await query.answer("❌ غير اللي قبط الطلبية يقدر يلغيها", show_alert=True)  
+            await query.answer("❌ غير اللي خدا الطلبية يقدر يلغيها", show_alert=True)  
             return  
 
         taken_by = order["taken_by"]  
@@ -301,7 +333,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.delete()
         await query.answer("❌ تم الإلغاء، الطلبية رجعات للجروب.")
 
-        # 🔔 إشعار للأدمن: الطلبية تلغات
+        # 🔔 إشعار للأدمنز
         for admin_id in ADMIN_IDS:
             try:
                 await context.bot.send_message(
@@ -312,7 +344,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 print(f"Error sending admin notification: {e}")
 
-# 📊 تعديل دالة الاستعراض لتصبح ملونة ومنظمة كـ "الجدول"
+# 📊 لائحة الطلبيات
 async def list_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     all_orders = db_get_all_orders()
     if not all_orders:
@@ -324,19 +356,15 @@ async def list_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     for i, o in enumerate(all_orders):  
         if o["done"]:  
-            # طلبية مكملة: مربع أخضر
             status_line = f"🟩 *[#{o['number']}]* 🕒 {o['time']}"
         elif o["taken"]:  
-            # طلبية مقبوطة: مربع أزرق + سمية الليفرور
-            status_line = f"🟦 *[#{o['number']}]* 🕒 {o['time']} 👤 {o['taken_by']}"
+            status_line = f"🟦 *[#{o['number']}]* 🕒 {o['time']} 👤 قيد التوصيل ({o['taken_by']})"
         else:  
-            # طلبية مازال خاوية: مربع برتقالي
             status_line = f"🟧 *[#{o['number']}]* 🕒 {o['time']}"
             
         msg += f"{status_line}\n"
         msg += f"📝 {o['text']}\n"
         
-        # خط فاصل بين الطلبيات
         if i < len(all_orders) - 1:
             msg += "────────────────\n"
             
@@ -352,12 +380,12 @@ async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mine = [o for o in all_orders if o["taken_by_id"] == user_id]  
 
     if not mine:  
-        await update.message.reply_text("📭 ما قابط حتى طلبية دابا.")  
+        await update.message.reply_text("📭 ما واخد حتى طلبية دابا.")  
         return  
 
     msg = f"📦 *الطلبيات ديال {user_name}:*\n\n"  
     for o in mine:  
-        status = "🏁 تليفرات" if o["done"] else "✅ مقبوطة"  
+        status = "🏁 تليفرات" if o["done"] else "✅ قيد التوصيل"  
         msg += f"#{o['number']} [{o['time']}] {status} — {o['text']}\n"  
 
     await update.message.reply_text(msg, parse_mode="Markdown")
@@ -365,7 +393,7 @@ async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
     all_scores = db_get_scores()
     if not all_scores:
-        await update.message.reply_text("🏆 ما كاين حتى واحد قبط شي طلبية!")
+        await update.message.reply_text("🏆 ما كاين حتى واحد خدا شي طلبية!")
         return
 
     msg = "🏆 *لائحة المتصدرين:*\n\n"  
@@ -385,7 +413,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📦 المجموع: {s['total']}\n"
         f"🏁 تليفرات: {s['done']}\n"
         f"✅ جارية: {s['in_progress']}\n"
-        f"⏳ مازال ما تقبطات: {s['waiting']}"
+        f"⏳ مازال ما تشدات: {s['waiting']}"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
 
@@ -418,4 +446,3 @@ app.add_handler(CallbackQueryHandler(button))
 print("✅ Bot running...")
 PORT = int(os.environ.get("PORT", 8080))
 app.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"https://renderteset-1.onrender.com/{TOKEN}")
-        
