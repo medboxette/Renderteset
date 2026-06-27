@@ -15,7 +15,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL environment variable is not set")
 
-# 🚨 الـ IDs ديالك وديال خوك كأدمن باش يجيوكم الإشعارات ف الخاص بجوج
+# 🚨 الـ IDs ديالك وديال خوك كأدمن بجوج
 ADMIN_IDS = [6243248782, 8373828587]
 
 # 🌐 الـ ID ديال الجروب ديالك
@@ -157,7 +157,7 @@ def db_clear_specific_order(group_msg_id: int):
 
 # ── Keyboards ─────────────────────────────────────────────────────────────────
 
-def build_keyboard(taken: bool, phone: str = None):
+def build_keyboard(taken: bool, phones_str: str = None):
     if not taken:
         return InlineKeyboardMarkup([[InlineKeyboardButton("خديتها 🚚", callback_data="take")]])
         
@@ -168,17 +168,18 @@ def build_keyboard(taken: bool, phone: str = None):
         ]
     ]
     
-    # زر الواتساب الاحترافي (مضمون ومقبول ف تيليجرام)
-    if phone:
-        clean_phone = phone.strip()
-        if clean_phone.startswith("0"):
-            whatsapp_phone = "212" + clean_phone[1:]
-        else:
-            whatsapp_phone = clean_phone
+    # صنع أزرار منفصلة لكل رقم هاتف تم العثور عليه
+    if phones_str:
+        phones = phones_str.split(",")
+        for i, p in enumerate(phones):
+            clean_p = p.strip()
+            if not clean_p:
+                continue
+            whatsapp_phone = "212" + clean_p[1:] if clean_p.startswith("0") else clean_p
             
-        buttons.append([
-            InlineKeyboardButton("💬 مراسلة واتساب", url=f"https://wa.me/{whatsapp_phone}")
-        ])
+            # إيلا كان رقم واحد غايتسمى "واتساب الكليان"، إيلا كانوا جوج غايتسموا "واتساب 1" و "واتساب 2"
+            btn_text = f"💬 واتساب الكليان" if len(phones) == 1 else f"💬 واتساب {i+1} ({clean_p})"
+            buttons.append([InlineKeyboardButton(btn_text, url=f"https://wa.me/{whatsapp_phone}")])
         
     return InlineKeyboardMarkup(buttons)
 
@@ -193,9 +194,18 @@ async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ خاصك تكتب معلومات الطلبية بعد /cmd")
         return
 
-    # التقاط أول رقم هاتف كيبدا بـ 06 أو 07 أو 05
-    phone_match = re.search(r'(0[567]\d{8})', text)
-    phone = phone_match.group(1) if phone_match else None
+    # استخراج جميع أرقام الهواتف من النص
+    found_phones = re.findall(r'(0[567]\d{8})', text)
+    
+    # مسح الأرقام من النص باش يبان منظم ونقي ومايخربقش الشوفات
+    for p in found_phones:
+        text = text.replace(p, "").strip()
+    
+    # تنظيف الفراغات الزائدة والأسطر الخاوية اللي بقاو
+    text = re.sub(r'\n+', '\n', text).strip()
+
+    # حفظ الأرقام مفروقين بفاصلة ف قاعدة البيانات
+    phones_str = ",".join(found_phones) if found_phones else None
 
     counter = db_increment_counter()  
     now = datetime.now().strftime("%H:%M")  
@@ -207,7 +217,7 @@ async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=build_keyboard(taken=False),
         )
     except Exception as e:
-        await update.message.reply_text(f"❌ فشل إرسال الطلبية للجروب. تأكد من الـ ID وصلاحيات البوت.\nError: {e}")
+        await update.message.reply_text(f"❌ فشل إرسال الطلبية للجروب.\nError: {e}")
         return
 
     await update.message.reply_text(f"✅ تم إرسال الطلبية #{counter} بنجاح إلى الجروب.")
@@ -220,7 +230,7 @@ async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "done": False,  
         "taken_by": None,  
         "taken_by_id": None,  
-        "phone": phone
+        "phone": phones_str
     })
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -245,10 +255,9 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             private_msg = await context.bot.send_message(
                 chat_id=user_id,
                 text=f"✅ خديتيها بنجاح:\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 تفاصيل الطلبية:\n\n{order['text']}",
-                reply_markup=build_keyboard(taken=True, phone=order.get("phone"))
+                reply_markup=build_keyboard(taken=True, phones_str=order.get("phone"))
             )
         except Exception as e:
-            # إيلا طرا أي مشكل حقيقي ف الإرسال كيبان هنا ف السيرفر
             print(f"Error sending private message: {e}")
             await query.answer("⚠️ خاصك ضروري تدخل عند البوت ف الخاص ودير /start عاد تقدر تاخد الطلبيات!", show_alert=True)
             return
@@ -319,7 +328,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             new_group_msg = await context.bot.send_message(
                 chat_id=GROUP_CHAT_ID,
-                text=f"🔄 (رجعات خاوية) طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 الطلبية:\n\n{text}",
+                text=f"🔄 (رجعات خاوية) طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 الطلبية:\n\n{order['text']}",
                 reply_markup=build_keyboard(taken=False)
             )
             db_clear_specific_order(msg_id)
@@ -335,7 +344,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_message(
                     chat_id=admin_id,
-                    text=f"❌ *إشعار جديد:*\nالطلبية *#{order['number']}* telgat mon taraf *{taken_by}*.",
+                    text=f"❌ *إشعار جديد:*\nالطلبية *#{order['number']}* تلغات من طرف *{taken_by}* ورجعات للجروب خاوية.",
                     parse_mode="Markdown"
                 )
             except Exception as e:
@@ -443,3 +452,4 @@ app.add_handler(CallbackQueryHandler(button))
 print("✅ Bot running...")
 PORT = int(os.environ.get("PORT", 8080))
 app.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"https://renderteset-1.onrender.com/{TOKEN}")
+    
