@@ -168,16 +168,15 @@ def build_keyboard(taken: bool, phones_str: str = None):
         ]
     ]
     
-    # هنا غانديروا زر عادي (Callback) كيرسل الأمر للبوت باش نتحاشاو حظر روابط tel:
+    # 📞 الأزرار غاتبقى أزرار عادية (Callback) باش ما تبلوكاوش، ولكن غانطلعو النمرة ف تنبيه سريع (Alert) بلا ميساجات جديدة!
     if phones_str:
         phones = phones_str.split(",")
         for i, p in enumerate(phones):
             clean_p = p.strip()
             if not clean_p:
                 continue
-            btn_text = "📞 اتصل بالكليان" if len(phones) == 1 else f"📞 اتصل بالرقم {i+1}"
-            # صيفطنا النمرة ف الـ callback_data باش البوت يتعامل معاها
-            buttons.append([InlineKeyboardButton(btn_text, callback_data=f"call_{clean_p}")])
+            btn_text = "📞 إظهار رقم الكليان" if len(phones) == 1 else f"📞 إظهار الرقم {i+1}"
+            buttons.append([InlineKeyboardButton(btn_text, callback_data=f"show_{clean_p}")])
         
     return InlineKeyboardMarkup(buttons)
 
@@ -232,16 +231,11 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_id = query.message.message_id  
     data = query.data
 
-    # 📞 التعامل مع زر الاتصال ملي يبرك عليه الليفرور
-    if data.startswith("call_"):
+    # 📱 هنا الحل السحري: ملي يبرك على زر الرقم، غايطلع ليه تنبيه (Alert) فيه النمرة وسط الشاشة بلا ما يرسل أي رسالة!
+    if data.startswith("show_"):
         phone_num = data.split("_")[1]
-        # صيفطنا ليه النمرة كـ رابط نصي (Markdown) تليغرام كيقبلو وكيدوز للاتصال ف البلاصة
-        await context.bot.send_message(
-            chat_id=user_id,
-            text=f"📱 اضغط على الرقم للاتصال المباشر:\n👉 tg://user?id={phone_num} \n\nأو إضغط هنا: \n[📞 اتصل دابا بـ {phone_num}](tel:{phone_num})",
-            parse_mode="Markdown"
-        )
-        await query.answer("✅ تم إرسال رابط الاتصال بالرقم!")
+        # كيرجع التنبيه مباشرة ف شاشة الليفرور ونقدروا نخليوه ينسخها بسهولة
+        await query.answer(text=f"📱 رقم الكليان هو:\n{phone_num}\n\n(تقدر تنقلو وتعيط ديريكت)", show_alert=True)
         return
 
     order = db_get_order(msg_id)
@@ -256,6 +250,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return  
 
         try:
+            # كنرسلو الميساج الأصلي للخاص مع الأزرار الجديدة
             private_msg = await context.bot.send_message(
                 chat_id=user_id,
                 text=f"✅ خديتيها بنجاح:\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 تفاصيل الطلبية:\n\n{order['text']}",
@@ -453,3 +448,4 @@ app.add_handler(CallbackQueryHandler(button))
 print("✅ Bot running...")
 PORT = int(os.environ.get("PORT", 8080))
 app.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"https://renderteset-1.onrender.com/{TOKEN}")
+                
