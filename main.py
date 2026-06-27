@@ -519,4 +519,4 @@ app.add_handler(CallbackQueryHandler(button))
 
 print("✅ Bot running...")
 PORT = int(os.environ.get("PORT", 8080))
-app.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"https://renderteset-1.o
+app.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"https://renderteset-1.onrender.com/{TOKEN}")
