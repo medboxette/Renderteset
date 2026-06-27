@@ -29,6 +29,7 @@ def get_conn():
 def init_db():
     with get_conn() as conn:
         with conn.cursor() as cur:
+            # 1. إنشاء جدول الطلبيات
             cur.execute("""
             CREATE TABLE IF NOT EXISTS orders (
                 group_msg_id BIGINT PRIMARY KEY,
@@ -42,11 +43,8 @@ def init_db():
                 phone       TEXT
             )
             """)
-            try:
-                cur.execute("ALTER TABLE orders ADD COLUMN phone TEXT")
-            except Exception:
-                conn.rollback()
             
+            # 2. إنشاء جدول النقاط
             cur.execute("""
             CREATE TABLE IF NOT EXISTS scores (
                 username TEXT PRIMARY KEY,
@@ -54,24 +52,28 @@ def init_db():
                 user_id  BIGINT
             )
             """)
-            # تحديث لجدول scores للتأكد من وجود عمود user_id لحفظ آي دي الليفرور عند التفاعل
+            
+            # فحص آمن لزيادة عمود user_id في جدول scores لتفادي أي كراش ف السيرفر
             try:
-                cur.execute("ALTER TABLE scores ADD COLUMN user_id BIGINT")
+                cur.execute("ALTER TABLE scores ADD COLUMN IF NOT EXISTS user_id BIGINT")
+                conn.commit()
             except Exception:
                 conn.rollback()
 
-            cur.execute("""
-            CREATE TABLE IF NOT EXISTS counter (
-                id    INTEGER PRIMARY KEY DEFAULT 1,
-                value INTEGER NOT NULL DEFAULT 0
-            )
-            """)
-            cur.execute("""
-            INSERT INTO counter (id, value)
-            VALUES (1, 0)
-            ON CONFLICT (id) DO NOTHING
-            """)
-            conn.commit()
+            # 3. إنشاء العداد
+            with conn.cursor() as cur2:
+                cur2.execute("""
+                CREATE TABLE IF NOT EXISTS counter (
+                    id    INTEGER PRIMARY KEY DEFAULT 1,
+                    value INTEGER NOT NULL DEFAULT 0
+                )
+                """)
+                cur2.execute("""
+                INSERT INTO counter (id, value)
+                VALUES (1, 0)
+                ON CONFLICT (id) DO NOTHING
+                """)
+                conn.commit()
     print("✅ Database initialized safely")
 
 def db_increment_counter() -> int:
@@ -144,7 +146,6 @@ def db_get_scores() -> list[tuple[str, int]]:
             return cur.fetchall()
 
 def db_get_user_id_by_username(username: str) -> int:
-    # دالة للبحث عن الـ ID ديال الليفرور بواسطة الإسم ديالو
     username = username.replace("@", "").strip()
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -236,18 +237,15 @@ async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     })
 
 async def cmd_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # أمر جديد خاص بالأدمن لإرسال طلبية لليفرور محدد ديريكت
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         await update.message.reply_text("❌ هاد الأمر مخصص للأدمن فقط.")
         return
 
-    # عزل النص بعد /cmd_to
     full_text = update.message.text.strip()
     if full_text.startswith("/cmd_to"):
         full_text = full_text[7:].strip()
 
-    # تقسيم النص لأخذ المعرف الأول (إما username أو ID) والباقي هو الطلبية
     parts = full_text.split(maxsplit=1)
     if len(parts) < 2:
         await update.message.reply_text("⚠️ الطريقة الصحيحة:\n`/cmd_to username_أو_id تفاصيل الطلبية`", parse_mode="Markdown")
@@ -256,14 +254,12 @@ async def cmd_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_driver = parts[0].strip()
     order_text = parts[1].strip()
 
-    # محاولة معرفة الـ ID ديال الليفرور المتوجّه ليه الطلبية
     target_id = None
     driver_name = target_driver
 
     if target_driver.isdigit():
         target_id = int(target_driver)
     else:
-        # البحث ف قاعدة البيانات عن الـ ID المرتبط بهاد الإسم
         target_id = db_get_user_id_by_username(target_driver)
 
     if not target_id:
@@ -276,7 +272,6 @@ async def cmd_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
     counter = db_increment_counter()  
     now = datetime.now().strftime("%H:%M")  
 
-    # تنظيف الأرقام المخرّبقة ديريكت قبل الإرسال لليفرور المحدد
     formatted_text = order_text
     raw_phones = re.findall(r'(?:\+212|0)[ \-_]*[567](?:[ \-_]*\d){8}', formatted_text)
     for p in raw_phones:
@@ -290,19 +285,17 @@ async def cmd_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
     final_text = f"🎯 طلبية موجهة ليك ديريكت من الأدمن:\n🔢 طلبية #{counter}\n🕒 {now}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
 
     try:
-        # إرسال الطلبية مباشرة لخاص الليفرور
         private_msg = await context.bot.send_message(
             chat_id=target_id,
             text=final_text,
             reply_markup=build_keyboard(taken=True)
         )
     except Exception as e:
-        await update.message.reply_text(f"❌ فشل إرسال الطلبية لخاص الليفرور.\nممكن يكون بلوكا البوت. Error: {e}")
+        await update.message.reply_text(f"❌ فشل إرسال الطلبية لخاص الليفرور.\nError: {e}")
         return
 
     await update.message.reply_text(f"🚀 تم إرسال الطلبية #{counter} مباشرة إلى خاص الليفرور بنجاح.")
 
-    # حفظ الطلبية ف قاعدة البيانات كـ Taken (مأخوذة) ومربوطة بـ ID ديال الليفرور ديريكت
     db_save_order(private_msg.message_id, {  
         "number": counter,  
         "text": order_text,  
@@ -313,7 +306,6 @@ async def cmd_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "taken_by_id": target_id,  
         "phone": phones_str
     })
-    # إضافة نقطة لهاد الليفرور حيت الأدمن كلفو بيها ديريكت
     db_add_score(driver_name, +1, user_id=target_id)
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -329,7 +321,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("⚠️ هاد الطلبية ما كايناش ف السيستم أو قديمة", show_alert=True)  
         return  
 
-    # تحديث وتخزين الـ ID ديال أي ليفرور كيضغط على الأزرار باش نعقلو عليه ف السيستم للمستقبل
     db_add_score(user, 0, user_id=user_id)
 
     if data == "take":  
@@ -508,8 +499,24 @@ async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_name = update.effective_user.first_name or update.effective_user.username or "ليفرور"
-    # حفظ آي دي المستخدم فور تشغيل البوت لضمان تسجيله في قاعدة البيانات للاتصال المباشر
     db_add_score(user_name, 0, user_id=user_id)
     await update.message.reply_text("👋 أهلاً بيك ف بوت إدارة الطلبيات!")
 
-# ── Main ───────────────
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+init_db()
+
+app = ApplicationBuilder().token(TOKEN).build()
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("cmd", cmd))
+app.add_handler(CommandHandler("cmd_to", cmd_to))
+app.add_handler(CommandHandler("list", list_orders))
+app.add_handler(CommandHandler("myorders", my_orders))
+app.add_handler(CommandHandler("top", top))
+app.add_handler(CommandHandler("stats", stats))
+app.add_handler(CommandHandler("clear", clear))
+app.add_handler(CallbackQueryHandler(button))
+
+print("✅ Bot running...")
+PORT = int(os.environ.get("PORT", 8080))
+app.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"https://renderteset-1.o
