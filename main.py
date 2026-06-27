@@ -15,7 +15,7 @@ if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL environment variable is not set")
 
 # 🚨 الـ ID ديالك كأدمن باش يجيوك الإشعارات هنا ف الخاص
-ADMIN_IDS = [6243248782]
+ADMIN_IDS = [6243248782,8373828587]
 
 # 🌐 الـ ID ديال الجروب ديالك
 GROUP_CHAT_ID = -1003929375047  
