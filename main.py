@@ -514,35 +514,4 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = f"📊 إحصائيات الطلبيات — {today}\n\n📦 المجموع: {s['total']}\n🏁 تليفرات: {s['done']}\n✅ جارية: {s['in_progress']}\n⏳ مازال ما تشدات: {s['waiting']}"
     await update.message.reply_text(msg)
 
-async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS:
-        await update.message.reply_text("❌ هاد الأمر مخصص للأدمن فقط.")
-        return
-
-    db_clear_all()  
-    await update.message.reply_text("🗑️ تم تصفير الطلبيات والسكورات بنجاح، واللوافريا بقاو مسجلين ف السيستم!")
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_name = update.effective_user.first_name or update.effective_user.username or "ليفرور"
-    db_add_score(user_name, 0, user_id=user_id)
-    await update.message.reply_text("👋 أهلاً بيك ف بوت إدارة الطلبيات!")
-
-# ── Main ──────────────────────────────────────────────────────────────────────
-
-init_db()
-
-app = ApplicationBuilder().token(TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("cmd", cmd))
-app.add_handler(CommandHandler("cmd_to", cmd_to))
-app.add_handler(CommandHandler("list", list_orders))
-app.add_handler(CommandHandler("myorders", my_orders))
-app.add_handler(CommandHandler("top", top))
-app.add_handler(CommandHandler("stats", stats))
-app.add_handler(CommandHandler("clear", clear))
-app.add_handler(CallbackQueryHandler(button))
-
-print("✅ Bot running...")
-PORT = int(os.environ.get("PORT", 8080))
-app.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"https://renderteset-1.onrender.com/{TOKEN}")
+async def clear(update: Update, context: ContextTypes.DEFA
