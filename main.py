@@ -27,53 +27,56 @@ def get_conn():
     return psycopg2.connect(DATABASE_URL)
 
 def init_db():
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            # 1. إنشاء جدول الطلبيات
-            cur.execute("""
-            CREATE TABLE IF NOT EXISTS orders (
-                group_msg_id BIGINT PRIMARY KEY,
-                number      INTEGER NOT NULL,
-                text        TEXT    NOT NULL,
-                time        TEXT    NOT NULL,
-                taken       BOOLEAN NOT NULL DEFAULT FALSE,
-                done        BOOLEAN NOT NULL DEFAULT FALSE,
-                taken_by    TEXT,
-                taken_by_id BIGINT,
-                phone       TEXT
-            )
-            """)
-            
-            # 2. إنشاء جدول النقاط
-            cur.execute("""
-            CREATE TABLE IF NOT EXISTS scores (
-                username TEXT PRIMARY KEY,
-                score    INTEGER NOT NULL DEFAULT 0,
-                user_id  BIGINT
-            )
-            """)
-            
-            try:
-                cur.execute("ALTER TABLE scores ADD COLUMN IF NOT EXISTS user_id BIGINT")
-                conn.commit()
-            except Exception:
-                conn.rollback()
-
-            # 3. إنشاء العداد
-            with conn.cursor() as cur2:
-                cur2.execute("""
-                CREATE TABLE IF NOT EXISTS counter (
-                    id    INTEGER PRIMARY KEY DEFAULT 1,
-                    value INTEGER NOT NULL DEFAULT 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                # 1. إنشاء جدول الطلبيات
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS orders (
+                    group_msg_id BIGINT PRIMARY KEY,
+                    number      INTEGER NOT NULL,
+                    text        TEXT    NOT NULL,
+                    time        TEXT    NOT NULL,
+                    taken       BOOLEAN NOT NULL DEFAULT FALSE,
+                    done        BOOLEAN NOT NULL DEFAULT FALSE,
+                    taken_by    TEXT,
+                    taken_by_id BIGINT,
+                    phone       TEXT
                 )
                 """)
-                cur2.execute("""
-                INSERT INTO counter (id, value)
-                VALUES (1, 0)
-                ON CONFLICT (id) DO NOTHING
+                
+                # 2. إنشاء جدول النقاط
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS scores (
+                    username TEXT PRIMARY KEY,
+                    score    INTEGER NOT NULL DEFAULT 0,
+                    user_id  BIGINT
+                )
                 """)
-                conn.commit()
-    print("✅ Database initialized safely")
+                
+                try:
+                    cur.execute("ALTER TABLE scores ADD COLUMN IF NOT EXISTS user_id BIGINT")
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+
+                # 3. إنشاء العداد
+                with conn.cursor() as cur2:
+                    cur2.execute("""
+                    CREATE TABLE IF NOT EXISTS counter (
+                        id    INTEGER PRIMARY KEY DEFAULT 1,
+                        value INTEGER NOT NULL DEFAULT 0
+                    )
+                    """)
+                    cur2.execute("""
+                    INSERT INTO counter (id, value)
+                    VALUES (1, 0)
+                    ON CONFLICT (id) DO NOTHING
+                    """)
+                    conn.commit()
+        print("✅ Database initialized safely")
+    except Exception as e:
+        print(f"⚠️ Error during database initialization: {e}")
 
 def db_increment_counter() -> int:
     with get_conn() as conn:
@@ -145,10 +148,14 @@ def db_get_scores() -> list[tuple[str, int]]:
             return cur.fetchall()
 
 def db_get_all_drivers_with_id() -> list[dict]:
-    with get_conn() as conn:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute("SELECT username, user_id FROM scores WHERE user_id IS NOT NULL")
-            return cur.fetchall()
+    try:
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT username, user_id FROM scores WHERE user_id IS NOT NULL")
+                return cur.fetchall()
+    except Exception as e:
+        print(f"Error fetching drivers: {e}")
+        return []
 
 def db_get_stats() -> dict:
     with get_conn() as conn:
@@ -164,13 +171,15 @@ def db_get_stats() -> dict:
             return {"total": total, "done": done, "in_progress": in_progress, "waiting": waiting}
 
 def db_clear_all():
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM orders")
-            # التعديل هنا: تصفير السكور فقط والحفاظ على الـ IDs والأسماء مسجلة
-            cur.execute("UPDATE scores SET score = 0")
-            cur.execute("UPDATE counter SET value = 0 WHERE id = 1")
-            conn.commit()
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM orders")
+                cur.execute("UPDATE scores SET score = 0")
+                cur.execute("UPDATE counter SET value = 0 WHERE id = 1")
+                conn.commit()
+    except Exception as e:
+        print(f"Error clearing db: {e}")
 
 def db_clear_specific_order(group_msg_id: int):
     with get_conn() as conn:
@@ -515,4 +524,25 @@ async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    user_name = update.effecti
+    user_name = update.effective_user.first_name or update.effective_user.username or "ليفرور"
+    db_add_score(user_name, 0, user_id=user_id)
+    await update.message.reply_text("👋 أهلاً بيك ف بوت إدارة الطلبيات!")
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+init_db()
+
+app = ApplicationBuilder().token(TOKEN).build()
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("cmd", cmd))
+app.add_handler(CommandHandler("cmd_to", cmd_to))
+app.add_handler(CommandHandler("list", list_orders))
+app.add_handler(CommandHandler("myorders", my_orders))
+app.add_handler(CommandHandler("top", top))
+app.add_handler(CommandHandler("stats", stats))
+app.add_handler(CommandHandler("clear", clear))
+app.add_handler(CallbackQueryHandler(button))
+
+print("✅ Bot running...")
+PORT = int(os.environ.get("PORT", 8080))
+app.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"https://renderteset-1.onrender.com/{TOKEN}")
