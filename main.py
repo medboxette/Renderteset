@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os
 import re
 import psycopg2
@@ -15,7 +16,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL environment variable is not set")
 
-# 🚨 الـ IDs ديال الأدمنز (نتا وخوك)
+# 🚨 الـ IDs ديال الأدمنز
 ADMIN_IDS = [6243248782, 8373828587]
 
 # 🌐 الـ ID ديال الجروب
@@ -30,7 +31,7 @@ def init_db():
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
-                # 1. إنشاء جدول الطلبيات (إضافة عمود admin_name)
+                # 1. إنشاء جدول الطلبيات
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS orders (
                     group_msg_id BIGINT PRIMARY KEY,
@@ -46,12 +47,11 @@ def init_db():
                 )
                 """)
                 
-                # تحديث الجدول إذا كان قديم باش يتزاد العمود بلا مشاكل
+                # تحديث الجدول بأمان لإضافة العمود الجديد إذا لم يكن موجوداً
                 try:
                     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS admin_name TEXT")
-                    conn.commit()
                 except Exception:
-                    conn.rollback()
+                    pass
                 
                 # 2. إنشاء جدول النقاط
                 cur.execute("""
@@ -64,24 +64,22 @@ def init_db():
                 
                 try:
                     cur.execute("ALTER TABLE scores ADD COLUMN IF NOT EXISTS user_id BIGINT")
-                    conn.commit()
                 except Exception:
-                    conn.rollback()
+                    pass
 
                 # 3. إنشاء العداد
-                with conn.cursor() as cur2:
-                    cur2.execute("""
-                    CREATE TABLE IF NOT EXISTS counter (
-                        id    INTEGER PRIMARY KEY DEFAULT 1,
-                        value INTEGER NOT NULL DEFAULT 0
-                    )
-                    """)
-                    cur2.execute("""
-                    INSERT INTO counter (id, value)
-                    VALUES (1, 0)
-                    ON CONFLICT (id) DO NOTHING
-                    """)
-                    conn.commit()
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS counter (
+                    id    INTEGER PRIMARY KEY DEFAULT 1,
+                    value INTEGER NOT NULL DEFAULT 0
+                )
+                """)
+                cur.execute("""
+                INSERT INTO counter (id, value)
+                VALUES (1, 0)
+                ON CONFLICT (id) DO NOTHING
+                """)
+            conn.commit()
         print("✅ Database initialized safely")
     except Exception as e:
         print(f"⚠️ Error during database initialization: {e}")
@@ -259,7 +257,7 @@ async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "taken_by": None,  
         "taken_by_id": None,  
         "phone": phones_str,
-        "admin_name": admin_name  # حفظ اسم الأدمن هنا
+        "admin_name": admin_name
     })
 
 async def cmd_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -380,7 +378,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 international_phone = "+212" + clean_digits[1:]
                 formatted_text = formatted_text.replace(p, international_phone)
 
-        # التعديل هنا: جلب اسم الأدمن من قاعدة البيانات وعرضه ف الخاص
         origin_admin = order.get("admin_name") or "الأدمن"
         final_text = f"✅ خديتيها بنجاح:\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
 
@@ -503,3 +500,12 @@ async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     all_orders = db_get_all_orders()  
     mine = [o for o in all_orders if o["taken_by_id"] == user_id]  
+
+    if not mine:  
+        await update.message.reply_text("📭 ما واخد حتى طلبية دابا.")  
+        return  
+
+    msg = f"📦 الطلبيات ديال {user_name}:\n\n"  
+    for o in mine:  
+        origin_admin = o.get("admin_name") or "الأدمن"
+        msg += f"#{o['number']} [{o['t
