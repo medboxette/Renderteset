@@ -47,7 +47,6 @@ def init_db():
                 )
                 """)
                 
-                # تحديث الجدول بأمان لإضافة العمود الجديد إذا لم يكن موجوداً
                 try:
                     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS admin_name TEXT")
                 except Exception:
@@ -508,4 +507,57 @@ async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = f"📦 الطلبيات ديال {user_name}:\n\n"  
     for o in mine:  
         origin_admin = o.get("admin_name") or "الأدمن"
-        msg += f"#{o['number']} [{o['t
+        msg += f"#{o['number']} [{o['time']}] (من: {origin_admin}) {'🏁 تليفرات' if o['done'] else '✅ قيد التوصيل'} — {o['text']}\n"  
+
+    await update.message.reply_text(msg)
+
+async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    all_scores = db_get_scores()
+    if not all_scores:
+        await update.message.reply_text("🏆 ما كاين حتى واحد خدا شي طلبية!")
+        return
+
+    msg = "🏆 لائحة المتصدرين:\n\n"  
+    medals = ["🥇", "🥈", "🥉"]  
+    for i, (username, score) in enumerate(all_scores):  
+        msg += f"{medals[i] if i < 3 else f'{i+1}.'} {username} — {score} طلبية\n"  
+
+    await update.message.reply_text(msg)
+
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    s = db_get_stats()
+    today = datetime.now().strftime("%d/%m/%Y")
+    msg = f"📊 إحصائيات الطلبيات — {today}\n\n📦 المجموع: {s['total']}\n🏁 تليفرات: {s['done']}\n✅ جارية: {s['in_progress']}\n⏳ مازال ما تشدات: {s['waiting']}"
+    await update.message.reply_text(msg)
+
+async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ هاد الأمر مخصص للأدمن فقط.")
+        return
+
+    db_clear_all()  
+    await update.message.reply_text("🗑️ تم تصفير الطلبيات والسكورات بنجاح، واللوافريا بقاو مسجلين ف السيستم!")
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_name = update.effective_user.first_name or update.effective_user.username or "ليفرور"
+    db_add_score(user_name, 0, user_id=user_id)
+    await update.message.reply_text("👋 أهلاً بيك ف بوت إدارة الطلبيات!")
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+init_db()
+
+app = ApplicationBuilder().token(TOKEN).build()
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("cmd", cmd))
+app.add_handler(CommandHandler("cmd_to", cmd_to))
+app.add_handler(CommandHandler("list", list_orders))
+app.add_handler(CommandHandler("myorders", my_orders))
+app.add_handler(CommandHandler("top", top))
+app.add_handler(CommandHandler("stats", stats))
+app.add_handler(CommandHandler("clear", clear))
+app.add_handler(CallbackQueryHandler(button))
+
+print("✅ Bot running...")
+app.run_polling()
