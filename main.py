@@ -4,6 +4,8 @@ import re
 import psycopg2
 import psycopg2.extras
 from datetime import datetime
+import threading
+from http.server import SimpleHTTPRequestHandler, HTTPServer
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -22,6 +24,22 @@ ADMIN_IDS = [6243248782, 8373828587]
 # 🌐 الـ ID ديال الجروب
 GROUP_CHAT_ID = -1003929375047  
 
+# ── Dummy Health Check Server For Render ──────────────────────────────────────
+# هاد الجزء كايضمن أن Render يلقى الـ Port مفتوح ويرد عليه بـ 200 OK باش يخدم ديريكت
+class HealthCheckHandler(SimpleHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+def run_health_server(port):
+    try:
+        server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+        server.serve_forever()
+    except Exception as e:
+        print(f"Health server error: {e}")
+
 # ── Database ──────────────────────────────────────────────────────────────────
 
 def get_conn():
@@ -31,7 +49,6 @@ def init_db():
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
-                # 1. إنشاء جدول الطلبيات
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS orders (
                     group_msg_id BIGINT PRIMARY KEY,
@@ -52,7 +69,6 @@ def init_db():
                 except Exception:
                     pass
                 
-                # 2. إنشاء جدول النقاط
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS scores (
                     username TEXT PRIMARY KEY,
@@ -66,7 +82,6 @@ def init_db():
                 except Exception:
                     pass
 
-                # 3. إنشاء العداد
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS counter (
                     id    INTEGER PRIMARY KEY DEFAULT 1,
@@ -548,6 +563,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 init_db()
 
+# تشغيل الـ Health Server الخاص بـ Render فـ Thread منفصل
+PORT = int(os.environ.get("PORT", 8080))
+threading.Thread(target=run_health_server, args=(PORT,), daemon=True).start()
+print(f"🚀 Dummy Health check server started on port {PORT}")
+
+# تشغيل البوت بالـ Polling العادي والمستقر
 app = ApplicationBuilder().token(TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("cmd", cmd))
@@ -559,5 +580,5 @@ app.add_handler(CommandHandler("stats", stats))
 app.add_handler(CommandHandler("clear", clear))
 app.add_handler(CallbackQueryHandler(button))
 
-print("✅ Bot running...")
+print("✅ Bot running with Polling & Web port active...")
 app.run_polling()
