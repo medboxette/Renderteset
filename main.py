@@ -145,7 +145,6 @@ def db_get_scores() -> list[tuple[str, int]]:
             return cur.fetchall()
 
 def db_get_all_drivers_with_id() -> list[dict]:
-    # جلب كاع اللوافريا اللي عندهم آي دي مسجل ف القاعدة
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("SELECT username, user_id FROM scores WHERE user_id IS NOT NULL")
@@ -168,7 +167,8 @@ def db_clear_all():
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM orders")
-            cur.execute("DELETE FROM scores")
+            # التعديل هنا: تصفير السكور فقط والحفاظ على الـ IDs والأسماء مسجلة
+            cur.execute("UPDATE scores SET score = 0")
             cur.execute("UPDATE counter SET value = 0 WHERE id = 1")
             conn.commit()
 
@@ -192,10 +192,8 @@ def build_keyboard(taken: bool):
     ])
 
 def build_drivers_keyboard(drivers_list: list, order_text: str):
-    # بناء أزرار اللوافريا بشكل تلقائي ديناميكي
     buttons = []
     for d in drivers_list:
-        # الكولباك داتا غاتحمل الآي دي ديال الليفرور
         callback_data = f"assign_{d['user_id']}"
         buttons.append([InlineKeyboardButton(f"👤 {d['username']}", callback_data=callback_data)])
     return InlineKeyboardMarkup(buttons)
@@ -262,10 +260,8 @@ async def cmd_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ ما كاين حتى ليفرور مسجل ف قاعدة البيانات حالياً.")
         return
 
-    # حفظ نص الطلبية مؤقتاً ف الـ user_data باش نجبدوها ملي تختار من الأزرار
     context.user_data['pending_order_text'] = full_text
 
-    # إرسال أزرار اللوافريا للأدمن
     await update.message.reply_text(
         text="🚚 اختر الليفرور اللي بغيتي تصيفط ليه هاد الطلبية ديريكت:",
         reply_markup=build_drivers_keyboard(drivers, full_text)
@@ -278,13 +274,11 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_id = query.message.message_id  
     data = query.data
 
-    # تسجيل وتحديث بيانات أي ليفرور ضغط على زرار
     db_add_score(user, 0, user_id=user_id)
 
-    # معالجة اختيار الأدمن لليفرور محدد
     if data.startswith("assign_"):
         if user_id not in ADMIN_IDS:
-            await query.answer("❌ أنت لس الأدمن", show_alert=True)
+            await query.answer("❌ أنت لست الأدمن", show_alert=True)
             return
 
         target_id = int(data.split("_")[1])
@@ -294,7 +288,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("⚠️ انتهت صلاحية الجلسة، عاود اكتب الأمر من جديد.")
             return
 
-        # البحث عن اسم الليفرور بناء على الـ ID المختار
         drivers = db_get_all_drivers_with_id()
         driver_name = next((d['username'] for d in drivers if d['user_id'] == target_id), "ليفرور")
 
@@ -304,7 +297,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         counter = db_increment_counter()  
         now = datetime.now().strftime("%H:%M")  
 
-        # تنظيف وتحويل الأرقام ديريكت
         formatted_text = order_text
         raw_phones = re.findall(r'(?:\+212|0)[ \-_]*[567](?:[ \-_]*\d){8}', formatted_text)
         for p in raw_phones:
@@ -341,7 +333,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         })
         db_add_score(driver_name, +1, user_id=target_id)
         
-        # مسح النص المؤقت بعد النجاح
         if 'pending_order_text' in context.user_data:
             del context.user_data['pending_order_text']
         return
@@ -520,29 +511,8 @@ async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     db_clear_all()  
-    await update.message.reply_text("🗑️ تم تصفير الطلبيات والنقاط بنجاح.")
+    await update.message.reply_text("🗑️ تم تصفير الطلبيات والسكورات بنجاح، واللوافريا بقاو مسجلين ف السيستم!")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    user_name = update.effective_user.first_name or update.effective_user.username or "ليفرور"
-    db_add_score(user_name, 0, user_id=user_id)
-    await update.message.reply_text("👋 أهلاً بيك ف بوت إدارة الطلبيات!")
-
-# ── Main ──────────────────────────────────────────────────────────────────────
-
-init_db()
-
-app = ApplicationBuilder().token(TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("cmd", cmd))
-app.add_handler(CommandHandler("cmd_to", cmd_to))
-app.add_handler(CommandHandler("list", list_orders))
-app.add_handler(CommandHandler("myorders", my_orders))
-app.add_handler(CommandHandler("top", top))
-app.add_handler(CommandHandler("stats", stats))
-app.add_handler(CommandHandler("clear", clear))
-app.add_handler(CallbackQueryHandler(button))
-
-print("✅ Bot running...")
-PORT = int(os.environ.get("PORT", 8080))
-app.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"https://renderteset-1.onrender.com/{TOKEN}")
+    user_name = update.effecti
