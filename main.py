@@ -420,6 +420,24 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         order["done"] = True  
         db_save_order(msg_id, order)  
 
+        # 🕒 حساب الوقت المستغرق بالتفصيل
+        try:
+            start_time = datetime.strptime(order["time"], "%H:%M")
+            now_time = datetime.now()
+            start_time = start_time.replace(year=now_time.year, month=now_time.month, day=now_time.day)
+            
+            duration = now_time - start_time
+            duration_minutes = int(duration.total_seconds() / 60)
+            
+            if duration_minutes < 60:
+                time_taken_str = f"{duration_minutes} دقيقة"
+            else:
+                hours = duration_minutes // 60
+                mins = duration_minutes % 60
+                time_taken_str = f"{hours} ساعة و {mins} دقيقة"
+        except Exception:
+            time_taken_str = "غير محدد"
+
         origin_admin = order.get("admin_name") or "الأدمن"
         await query.edit_message_text(  
             text=f"🏁 تليفرات بواسطة: {order['taken_by']}\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 الطلبية:\n\n{order['text']}"  
@@ -430,7 +448,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_message(
                     chat_id=admin_id,
-                    text=f"🏁 إشعار جديد:\nالطلبية #{order['number']} تليفرات بنجاح بواسطة {order['taken_by']}! 🎉",
+                    text=f"🏁 إشعار جديد:\nالطلبية #{order['number']} تليفرات بنجاح بواسطة {order['taken_by']}! 🎉\n⏱️ الوقت المستغرق: {time_taken_str}",
                 )
             except Exception as e:
                 print(f"Error sending admin notification: {e}")
@@ -472,7 +490,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 print(f"Error sending admin notification: {e}")
 
-# ── باقی الأوامر الإحصائية ──────────────────────────────────────────────────────
+# ── باقي الأوامر الإحصائية ──────────────────────────────────────────────────────
 
 async def list_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     all_orders = db_get_all_orders()
@@ -563,10 +581,9 @@ if RENDER_EXTERNAL_URL:
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
-        secret_token="MySuperSecretToken123", # حماية إضافية للبوت
+        secret_token="MySuperSecretToken123",
         webhook_url=f"{RENDER_EXTERNAL_URL}/"
     )
 else:
-    # يلا جربتيه محلياً ف الحاسوب (Local) يشتغل عادي بـ Polling
     print("💻 RENDER_EXTERNAL_URL not found, running with Polling...")
     app.run_polling()
