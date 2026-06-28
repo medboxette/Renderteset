@@ -15,7 +15,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL environment variable is not set")
 
-# 🚨 الـ IDs ديال الأدمنز
+# 🚨 الـ IDs ديال الأدمنز (نتا وخوك)
 ADMIN_IDS = [6243248782, 8373828587]
 
 # 🌐 الـ ID ديال الجروب
@@ -213,6 +213,7 @@ async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != "private":
         return
 
+    admin_name = update.effective_user.first_name or "الأدمن"
     text = update.message.text.strip()
     if text.startswith("/cmd"):
         text = text[4:].strip()
@@ -230,7 +231,7 @@ async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         group_msg = await context.bot.send_message(
             chat_id=GROUP_CHAT_ID,
-            text=f"🔢 طلبية #{counter}\n🕒 {now}\n\n📦 طلبية جديدة:\n\n{text}",
+            text=f"🔢 طلبية #{counter}\n🕒 {now}\n👤 بواسطة: {admin_name}\n\n📦 طلبية جديدة:\n\n{text}",
             reply_markup=build_keyboard(taken=False),
         )
     except Exception as e:
@@ -290,6 +291,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ أنت لست الأدمن", show_alert=True)
             return
 
+        admin_name = query.from_user.first_name or "الأدمن"
         target_id = int(data.split("_")[1])
         order_text = context.user_data.get('pending_order_text')
 
@@ -316,7 +318,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 international_phone = "+212" + clean_digits[1:]
                 formatted_text = formatted_text.replace(p, international_phone)
 
-        final_text = f"🎯 طلبية موجهة ليك ديريكت من الأدمن:\n🔢 طلبية #{counter}\n🕒 {now}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
+        final_text = f"🎯 طلبية موجهة ليك ديريكت من الأدمن: {admin_name}\n🔢 طلبية #{counter}\n🕒 {now}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
 
         try:
             private_msg = await context.bot.send_message(
@@ -514,4 +516,35 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = f"📊 إحصائيات الطلبيات — {today}\n\n📦 المجموع: {s['total']}\n🏁 تليفرات: {s['done']}\n✅ جارية: {s['in_progress']}\n⏳ مازال ما تشدات: {s['waiting']}"
     await update.message.reply_text(msg)
 
-async def clear(update: Update, context: ContextTypes.DEFA
+async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ هاد الأمر مخصص للأدمن فقط.")
+        return
+
+    db_clear_all()  
+    await update.message.reply_text("🗑️ تم تصفير الطلبيات والسكورات بنجاح، واللوافريا بقاو مسجلين ف السيستم!")
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_name = update.effective_user.first_name or update.effective_user.username or "ليفرور"
+    db_add_score(user_name, 0, user_id=user_id)
+    await update.message.reply_text("👋 أهلاً بيك ف بوت إدارة الطلبيات!")
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+init_db()
+
+app = ApplicationBuilder().token(TOKEN).build()
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("cmd", cmd))
+app.add_handler(CommandHandler("cmd_to", cmd_to))
+app.add_handler(CommandHandler("list", list_orders))
+app.add_handler(CommandHandler("myorders", my_orders))
+app.add_handler(CommandHandler("top", top))
+app.add_handler(CommandHandler("stats", stats))
+app.add_handler(CommandHandler("clear", clear))
+app.add_handler(CallbackQueryHandler(button))
+
+print("✅ Bot running...")
+PORT = int(os.environ.get("PORT", 8080))
+app.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"https://renderteset-1.onrender.com/{TOKEN}")
