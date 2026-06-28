@@ -17,9 +17,7 @@ if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL environment variable is not set")
 
 # 🚨 إعدادات Render والـ Webhook
-# الرابط ديال الخدمة ديالك على رندر (مثال: https://my-bot.onrender.com)
 RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL") 
-# الـ Port اللي كيعطيه رندر ديريكت للخدمة (غالباً 10000 أو اللي تحدد)
 PORT = int(os.environ.get("PORT", 8080))
 
 # الـ IDs ديال الأدمنز والجروب
@@ -283,6 +281,54 @@ async def cmd_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=build_drivers_keyboard(drivers, full_text)
     )
 
+# 🆕 دالة الحذف الاحترافية والآمنة
+async def delete_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ هاد الأمر مخصص للأدمن فقط.")
+        return
+
+    order_id_to_delete = None
+    msg_to_delete_id = None
+
+    # الطريقة 1: إذا دار الأدمن Reply على الميساج ف الجروب
+    if update.message.reply_to_message:
+        msg_to_delete_id = update.message.reply_to_message.message_id
+        order = db_get_order(msg_to_delete_id)
+        if order:
+            order_id_to_delete = order["number"]
+        else:
+            await update.message.reply_text("⚠️ هاد الميساج ما مرابطش بشي طلبية ف الداتابيز.")
+            return
+    # الطريقة 2: إذا كتب الرقم بحال /delete 3
+    else:
+        args = context.args
+        if not args or not args[0].isdigit():
+            await update.message.reply_text("⚠️ الطريقة الصحيحة:\n`/delete [رقم_الطلبية]` أو دير Reply على ميساج الطلبية ف الجروب وكتب `/delete`")
+            return
+        order_id_to_delete = int(args[0])
+        
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT group_msg_id FROM orders WHERE number = %s", (order_id_to_delete,))
+                row = cur.fetchone()
+                if row:
+                    msg_to_delete_id = row["group_msg_id"]
+
+    if not msg_to_delete_id or not order_id_to_delete:
+        await update.message.reply_text(f"❌ مالقيت حتى طلبية برقم #{order_id_to_delete} ف السيستم.")
+        return
+
+    # مسح من الداتابيز ديريكت
+    db_clear_specific_order(msg_to_delete_id)
+
+    # مسح الميساج من الجروب
+    try:
+        await context.bot.delete_message(chat_id=GROUP_CHAT_ID, message_id=msg_to_delete_id)
+        await update.message.reply_text(f"🗑️ تم حذف الطلبية #{order_id_to_delete} من الداتابيز والجروب بنجاح.")
+    except Exception:
+        await update.message.reply_text(f"🗑️ تم حذف الطلبية #{order_id_to_delete} من الداتابيز فقط (الميساج قديم أو ممسوح).")
+
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user = query.from_user.first_name or query.from_user.username or "ليفرور"
@@ -472,7 +518,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 print(f"Error sending admin notification: {e}")
 
-# ── باقی الأوامر الإحصائية ──────────────────────────────────────────────────────
+# ── باقي الأوامر الإحصائية ──────────────────────────────────────────────────────
 
 async def list_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     all_orders = db_get_all_orders()
@@ -504,69 +550,29 @@ async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = f"📦 الطلبيات ديال {user_name}:\n\n"  
     for o in mine:  
         origin_admin = o.get("admin_name") or "الأدمن"
-        msg += f"#{o['number']} [{o['time']}] (من: {origin_admin}) {'🏁 تليفرات' if o['done'] else '✅ قيد التوصيل'} — {o['text']}\n"  
-
+        msg += f"#{o['number']} [{o['time']}] (من: {origin_admin})\n"
     await update.message.reply_text(msg)
-
-async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    all_scores = db_get_scores()
-    if not all_scores:
-        await update.message.reply_text("🏆 ما كاين حتى واحد خدا شي طلبية!")
-        return
-
-    msg = "🏆 لائحة المتصدرين:\n\n"  
-    medals = ["🥇", "🥈", "🥉"]  
-    for i, (username, score) in enumerate(all_scores):  
-        msg += f"{medals[i] if i < 3 else f'{i+1}.'} {username} — {score} طلبية\n"  
-
-    await update.message.reply_text(msg)
-
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    s = db_get_stats()
-    today = datetime.now().strftime("%d/%m/%Y")
-    msg = f"📊 إحصائيات الطلبيات — {today}\n\n📦 المجموع: {s['total']}\n🏁 تليفرات: {s['done']}\n✅ جارية: {s['in_progress']}\n⏳ مازال ما تشدات: {s['waiting']}"
-    await update.message.reply_text(msg)
-
-async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS:
-        await update.message.reply_text("❌ هاد الأمر مخصص للأدمن فقط.")
-        return
-
-    db_clear_all()  
-    await update.message.reply_text("🗑️ تم تصفير الطلبيات والسكورات بنجاح، واللوافريا بقاو مسجلين ف السيستم!")
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_name = update.effective_user.first_name or update.effective_user.username or "ليفرور"
-    db_add_score(user_name, 0, user_id=user_id)
-    await update.message.reply_text("👋 أهلاً بيك ف بوت إدارة الطلبيات!")
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-init_db()
+if __name__ == "__main__":
+    init_db()
+    app = ApplicationBuilder().token(TOKEN).build()
 
-app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("cmd", cmd))
+    app.add_handler(CommandHandler("cmd_to", cmd_to))
+    app.add_handler(CommandHandler("delete", delete_order))  # ربط الأمر الجديد هنا
+    app.add_handler(CommandHandler("list", list_orders))
+    app.add_handler(CommandHandler("my_orders", my_orders))
+    app.add_handler(CallbackQueryHandler(button))
 
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("cmd", cmd))
-app.add_handler(CommandHandler("cmd_to", cmd_to))
-app.add_handler(CommandHandler("list", list_orders))
-app.add_handler(CommandHandler("myorders", my_orders))
-app.add_handler(CommandHandler("top", top))
-app.add_handler(CommandHandler("stats", stats))
-app.add_handler(CommandHandler("clear", clear))
-app.add_handler(CallbackQueryHandler(button))
-
-# 🚀 الطريقة الرسمية للـ Webhook اللي كتفتح المنفذ لـ Render تلقائياً وكتخليه Live
-if RENDER_EXTERNAL_URL:
-    print(f"🌐 Running with Webhook on port {PORT}...")
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        secret_token="MySuperSecretToken123", # حماية إضافية للبوت
-        webhook_url=f"{RENDER_EXTERNAL_URL}/"
-    )
-else:
-    # يلا جربتيه محلياً ف الحاسوب (Local) يشتغل عادي بـ Polling
-    print("💻 RENDER_EXTERNAL_URL not found, running with Polling...")
-    app.run_polling()
+    print("🚀 Bot started...")
+    if RENDER_EXTERNAL_URL:
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            webhook_url=f"{RENDER_EXTERNAL_URL}/webhook",
+            secret_token="SUPER_SECRET_TOKEN"
+        )
+    else:
+        app.run_polling()
