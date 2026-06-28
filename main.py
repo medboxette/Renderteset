@@ -31,20 +31,48 @@ def init_db():
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute(""" CREATE TABLE IF NOT EXISTS orders ( group_msg_id BIGINT PRIMARY KEY, number INTEGER NOT NULL, text TEXT NOT NULL, time TEXT NOT NULL, taken BOOLEAN NOT NULL DEFAULT FALSE, done BOOLEAN NOT NULL DEFAULT FALSE, taken_by TEXT, taken_by_id BIGINT, phone TEXT, admin_name TEXT ) """)
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS orders (
+                    group_msg_id BIGINT PRIMARY KEY,
+                    number      INTEGER NOT NULL,
+                    text        TEXT    NOT NULL,
+                    time        TEXT    NOT NULL,
+                    taken       BOOLEAN NOT NULL DEFAULT FALSE,
+                    done        BOOLEAN NOT NULL DEFAULT FALSE,
+                    taken_by    TEXT,
+                    taken_by_id BIGINT,
+                    phone       TEXT,
+                    admin_name  TEXT
+                )
+                """)
                 try:
                     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS admin_name TEXT")
                 except Exception:
                     pass
                 
-                cur.execute(""" CREATE TABLE IF NOT EXISTS scores ( username TEXT PRIMARY KEY, score INTEGER NOT NULL DEFAULT 0, user_id BIGINT ) """)
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS scores (
+                    username TEXT PRIMARY KEY,
+                    score    INTEGER NOT NULL DEFAULT 0,
+                    user_id  BIGINT
+                )
+                """)
                 try:
                     cur.execute("ALTER TABLE scores ADD COLUMN IF NOT EXISTS user_id BIGINT")
                 except Exception:
                     pass
 
-                cur.execute(""" CREATE TABLE IF NOT EXISTS counter ( id INTEGER PRIMARY KEY DEFAULT 1, value INTEGER NOT NULL DEFAULT 0 ) """)
-                cur.execute(""" INSERT INTO counter (id, value) VALUES (1, 0) ON CONFLICT (id) DO NOTHING """)
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS counter (
+                    id    INTEGER PRIMARY KEY DEFAULT 1,
+                    value INTEGER NOT NULL DEFAULT 0
+                )
+                """)
+                cur.execute("""
+                INSERT INTO counter (id, value)
+                VALUES (1, 0)
+                ON CONFLICT (id) DO NOTHING
+                """)
             conn.commit()
         print("✅ Database initialized safely")
     except Exception as e:
@@ -61,7 +89,17 @@ def db_increment_counter() -> int:
 def db_save_order(group_msg_id: int, order: dict):
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(""" INSERT INTO orders (group_msg_id, number, text, time, taken, done, taken_by, taken_by_id, phone, admin_name) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (group_msg_id) DO UPDATE SET taken = EXCLUDED.taken, done = EXCLUDED.done, taken_by = EXCLUDED.taken_by, taken_by_id = EXCLUDED.taken_by_id, phone = EXCLUDED.phone, admin_name = EXCLUDED.admin_name """, (
+            cur.execute("""
+            INSERT INTO orders (group_msg_id, number, text, time, taken, done, taken_by, taken_by_id, phone, admin_name)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (group_msg_id) DO UPDATE SET
+                taken       = EXCLUDED.taken,
+                done        = EXCLUDED.done,
+                taken_by    = EXCLUDED.taken_by,
+                taken_by_id = EXCLUDED.taken_by_id,
+                phone       = EXCLUDED.phone,
+                admin_name  = EXCLUDED.admin_name
+            """, (
                 group_msg_id,
                 order["number"],
                 order["text"],
@@ -92,9 +130,17 @@ def db_add_score(username: str, delta: int, user_id: int = None):
     with get_conn() as conn:
         with conn.cursor() as cur:
             if user_id:
-                cur.execute(""" INSERT INTO scores (username, score, user_id) VALUES (%s, %s, %s) ON CONFLICT (username) DO UPDATE SET score = GREATEST(scores.score + %s, 0), user_id = EXCLUDED.user_id """, (username, max(delta, 0), user_id, delta))
+                cur.execute("""
+                INSERT INTO scores (username, score, user_id) VALUES (%s, %s, %s)
+                ON CONFLICT (username) DO UPDATE SET 
+                    score = GREATEST(scores.score + %s, 0),
+                    user_id = EXCLUDED.user_id
+                """, (username, max(delta, 0), user_id, delta))
             else:
-                cur.execute(""" INSERT INTO scores (username, score) VALUES (%s, %s) ON CONFLICT (username) DO UPDATE SET score = GREATEST(scores.score + %s, 0) """, (username, max(delta, 0), delta))
+                cur.execute("""
+                INSERT INTO scores (username, score) VALUES (%s, %s)
+                ON CONFLICT (username) DO UPDATE SET score = GREATEST(scores.score + %s, 0)
+                """, (username, max(delta, 0), delta))
             conn.commit()
 
 def db_get_scores() -> list[tuple[str, int]]:
@@ -236,51 +282,6 @@ async def cmd_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=build_drivers_keyboard(drivers, full_text)
     )
 
-async def delete_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in ADMIN_IDS:
-        await update.message.reply_text("❌ هاد الأمر مخصص للأدمن فقط.")
-        return
-
-    order_id_to_delete = None
-    msg_to_delete_id = None
-
-    if update.message.reply_to_message:
-        msg_to_delete_id = update.message.reply_to_message.message_id
-        order = db_get_order(msg_to_delete_id)
-        if order:
-            order_id_to_delete = order["number"]
-        else:
-            await update.message.reply_text("⚠️ هاد الميساج ما مرابطش بشي طلبية ف الداتابيز.")
-            return
-    else:
-        args = context.args
-        if not args or not args[0].isdigit():
-            await update.message.reply_text("⚠️ الطريقة الصحيحة:\n`/delete [رقم_الطلبية]` أو دير Reply على ميساج الطلبية وكتب `/delete`")
-            return
-        order_id_to_delete = int(args[0])
-        
-        with get_conn() as conn:
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute("SELECT group_msg_id FROM orders WHERE number = %s", (order_id_to_delete,))
-                row = cur.fetchone()
-                if row:
-                    msg_to_delete_id = row["group_msg_id"]
-
-    if not msg_to_delete_id or not order_id_to_delete:
-        await update.message.reply_text(f"❌ مالقيت حتى طلبية برقم #{order_id_to_delete} ف السيستم.")
-        return
-
-    db_clear_specific_order(msg_to_delete_id)
-
-    try:
-        await context.bot.delete_message(chat_id=GROUP_CHAT_ID, message_id=msg_to_delete_id)
-        success_msg = f"🗑️ تم حذف الطلبية #{order_id_to_delete} من الداتابيز والجروب بنجاح."
-    except Exception:
-        success_msg = f"🗑️ تم حذف الطلبية #{order_id_to_delete} من الداتابيز (تعذر مسح الميساج من الجروب تلقائياً)."
-
-    await update.message.reply_text(success_msg)
-
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user = query.from_user.first_name or query.from_user.username or "ليفرور"
@@ -322,9 +323,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 international_phone = "+212" + clean_digits[1:]
                 formatted_text = formatted_text.replace(p, international_phone)
 
-        part1 = "🎯 طلبية موجهة ليك ديريكت من الأدمن: " + str(admin_name)
-        part2 = f"\n🔢 طلبية #{counter}\n🕒 {now}\n\n📦 تفاصيل الطلبية:\n\n"
-        final_text = part1 + part2 + str(formatted_text)
+        final_text = f"🎯 طلبية موجهة ليك ديريكت من الأدمن: {admin_name}\n🔢 طلبية #{counter}\n🕒 {now}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
 
         try:
             private_msg = await context.bot.send_message(
@@ -381,10 +380,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 formatted_text = formatted_text.replace(p, international_phone)
 
         origin_admin = order.get("admin_name") or "الأدمن"
-        
-        t_part1 = "✅ خديتيها بنجاح:\n"
-        t_part2 = f"🔢 طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 تفاصيل الطلبية:\n\n"
-        final_text = t_part1 + t_part2 + str(formatted_text)
+        final_text = f"✅ خديتيها بنجاح:\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
 
         try:
             await query.edit_message_text(
@@ -435,13 +431,8 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             time_taken_str = "غير محدد"
 
         origin_admin = order.get("admin_name") or "الأدمن"
-        
-        d_part1 = f"🏁 تليفرات بواسطة: {order['taken_by']}\n"
-        d_part2 = f"🔢 طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 الطلبية:\n\n"
-        d_part3 = f"\n⏱️ الوقت المستغرق: {time_taken_str}"
-        
         await query.edit_message_text(  
-            text=d_part1 + d_part2 + str(order['text']) + d_part3
+            text=f"🏁 تليفرات بواسطة: {order['taken_by']}\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 الطلبية:\n\n{order['text']}\n⏱️ الوقت المستغرق: {time_taken_str}"  
         )  
         await query.answer("✅ تم تأكيد التوصيل")  
 
@@ -465,4 +456,124 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         order["taken"] = False  
         order["taken_by"] = None  
- 
+        order["taken_by_id"] = None  
+
+        origin_admin = order.get("admin_name") or "الأدمن"
+        try:
+            new_group_msg = await context.bot.send_message(
+                chat_id=GROUP_CHAT_ID,
+                text=f"🔄 (رجعات خاوية) طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 الطلبية:\n\n{order['text']}",
+                reply_markup=build_keyboard(taken=False)
+            )
+            db_clear_specific_order(msg_id)
+            db_save_order(new_group_msg.message_id, order)
+        except Exception as e:
+            print(f"Error re-sending to group: {e}")
+
+        await query.message.delete()
+        await query.answer("❌ تم الإلغاء، الطلبية رجعات للجروب.")
+
+        for admin_id in ADMIN_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=f"❌ إشعار جديد:\nالطلبية #{order['number']} تلغات من طرف {taken_by} ورجعات للجروب خاوية.",
+                )
+            except Exception as e:
+                print(f"Error sending admin notification: {e}")
+
+
+async def list_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    all_orders = db_get_all_orders()
+    if not all_orders:
+        await update.message.reply_text("📋 ما كاين حتى طلبية دابا!")
+        return
+
+    msg = "📋 لائحة الطلبيات اليومية\n━━━━━━━━━━━━━━━\n"
+    for i, o in enumerate(all_orders):  
+        origin_admin = o.get("admin_name") or "الأدمن"
+        status_line = f"🟩 [#{o['number']}] 🕒 {o['time']} (👤 {origin_admin})" if o["done"] else (f"🟦 [#{o['number']}] 🕒 {o['time']} 👤 قيد التوصيل ({o['taken_by']}) [من {origin_admin}]" if o["taken"] else f"🟧 [#{o['number']}] 🕒 {o['time']} (👤 {origin_admin})")
+        msg += f"{status_line}\n📝 {o['text']}\n"
+        if i < len(all_orders) - 1:
+            msg += "────────────────\n"
+    msg += "━━━━━━━━━━━━━━━"  
+    await update.message.reply_text(msg)
+
+async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_name = update.effective_user.first_name
+
+    all_orders = db_get_all_orders()  
+    mine = [o for o in all_orders if o["taken_by_id"] == user_id]  
+
+    if not mine:  
+        await update.message.reply_text("📭 ما واخد حتى طلبية دابا.")  
+        return  
+
+    msg = f"📦 الطلبيات ديال {user_name}:\n\n"  
+    for o in mine:  
+        origin_admin = o.get("admin_name") or "الأدمن"
+        msg += f"#{o['number']} [{o['time']}] (من: {origin_admin}) {'🏁 تليفرات' if o['done'] else '✅ قيد التوصيل'} — {o['text']}\n"  
+
+    await update.message.reply_text(msg)
+
+async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    all_scores = db_get_scores()
+    if not all_scores:
+        await update.message.reply_text("🏆 ما كاين حتى واحد خدا شي طلبية!")
+        return
+
+    msg = "🏆 لائحة المتصدرين:\n\n"  
+    medals = ["🥇", "🥈", "🥉"]  
+    for i, (username, score) in enumerate(all_scores):  
+        msg += f"{medals[i] if i < 3 else f'{i+1}.'} {username} — {score} طلبية\n"  
+
+    await update.message.reply_text(msg)
+
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    s = db_get_stats()
+    today = datetime.now().strftime("%d/%m/%Y")
+    msg = f"📊 إحصائيات الطلبيات — {today}\n\n📦 المجموع: {s['total']}\n🏁 تليفرات: {s['done']}\n✅ جارية: {s['in_progress']}\n⏳ مازال ما تشدات: {s['waiting']}"
+    await update.message.reply_text(msg)
+
+async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ هاد الأمر مخصص للأدمن فقط.")
+        return
+
+    db_clear_all()  
+    await update.message.reply_text("🗑️ تم تصفير الطلبيات والسكورات بنجاح، واللوافريا بقاو مسجلين ف السيستم!")
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_name = update.effective_user.first_name or update.effective_user.username or "ليفرور"
+    db_add_score(user_name, 0, user_id=user_id)
+    await update.message.reply_text("👋 أهلاً بيك ف بوت إدارة الطلبيات!")
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+init_db()
+
+app = ApplicationBuilder().token(TOKEN).build()
+
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("cmd", cmd))
+app.add_handler(CommandHandler("cmd_to", cmd_to))
+app.add_handler(CommandHandler("list", list_orders))
+app.add_handler(CommandHandler("myorders", my_orders))
+app.add_handler(CommandHandler("top", top))
+app.add_handler(CommandHandler("stats", stats))
+app.add_handler(CommandHandler("clear", clear))
+app.add_handler(CallbackQueryHandler(button))
+
+if RENDER_EXTERNAL_URL:
+    print(f"🌐 Running with Webhook on port {PORT}...")
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        secret_token="MySuperSecretToken123",
+        webhook_url=f"{RENDER_EXTERNAL_URL}/"
+    )
+else:
+    print("💻 RENDER_EXTERNAL_URL not found, running with Polling...")
+    app.run_polling()
