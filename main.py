@@ -4,8 +4,6 @@ import re
 import psycopg2
 import psycopg2.extras
 from datetime import datetime
-import threading
-from http.server import SimpleHTTPRequestHandler, HTTPServer
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -18,27 +16,15 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL environment variable is not set")
 
-# 🚨 الـ IDs ديال الأدمنز
+# 🚨 إعدادات Render والـ Webhook
+# الرابط ديال الخدمة ديالك على رندر (مثال: https://my-bot.onrender.com)
+RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL") 
+# الـ Port اللي كيعطيه رندر ديريكت للخدمة (غالباً 10000 أو اللي تحدد)
+PORT = int(os.environ.get("PORT", 8080))
+
+# الـ IDs ديال الأدمنز والجروب
 ADMIN_IDS = [6243248782, 8373828587]
-
-# 🌐 الـ ID ديال الجروب
 GROUP_CHAT_ID = -1003929375047  
-
-# ── Dummy Health Check Server For Render ──────────────────────────────────────
-# هاد الجزء كايضمن أن Render يلقى الـ Port مفتوح ويرد عليه بـ 200 OK باش يخدم ديريكت
-class HealthCheckHandler(SimpleHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/plain")
-        self.end_headers()
-        self.wfile.write(b"OK")
-
-def run_health_server(port):
-    try:
-        server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
-        server.serve_forever()
-    except Exception as e:
-        print(f"Health server error: {e}")
 
 # ── Database ──────────────────────────────────────────────────────────────────
 
@@ -63,7 +49,6 @@ def init_db():
                     admin_name  TEXT
                 )
                 """)
-                
                 try:
                     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS admin_name TEXT")
                 except Exception:
@@ -76,7 +61,6 @@ def init_db():
                     user_id  BIGINT
                 )
                 """)
-                
                 try:
                     cur.execute("ALTER TABLE scores ADD COLUMN IF NOT EXISTS user_id BIGINT")
                 except Exception:
@@ -214,7 +198,6 @@ def db_clear_specific_order(group_msg_id: int):
 def build_keyboard(taken: bool):
     if not taken:
         return InlineKeyboardMarkup([[InlineKeyboardButton("خديتها 🚚", callback_data="take")]])
-        
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🏁 تليفرات", callback_data="done"),
@@ -402,7 +385,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=build_keyboard(taken=True)
             )
         except Exception as e:
-            print(f"Error sending private message: {e}")
             await query.answer("⚠️ خاصك ضروري تدخل عند البوت ف الخاص ودير /start عاد تقدر تاخد الطلبيات!", show_alert=True)
             return
 
@@ -490,7 +472,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 print(f"Error sending admin notification: {e}")
 
-# ── باقي الأوامر الإحصائية ──────────────────────────────────────────────────────
+# ── باقی الأوامر الإحصائية ──────────────────────────────────────────────────────
 
 async def list_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     all_orders = db_get_all_orders()
@@ -563,13 +545,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 init_db()
 
-# تشغيل الـ Health Server الخاص بـ Render فـ Thread منفصل
-PORT = int(os.environ.get("PORT", 8080))
-threading.Thread(target=run_health_server, args=(PORT,), daemon=True).start()
-print(f"🚀 Dummy Health check server started on port {PORT}")
-
-# تشغيل البوت بالـ Polling العادي والمستقر
 app = ApplicationBuilder().token(TOKEN).build()
+
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("cmd", cmd))
 app.add_handler(CommandHandler("cmd_to", cmd_to))
@@ -580,5 +557,16 @@ app.add_handler(CommandHandler("stats", stats))
 app.add_handler(CommandHandler("clear", clear))
 app.add_handler(CallbackQueryHandler(button))
 
-print("✅ Bot running with Polling & Web port active...")
-app.run_polling()
+# 🚀 الطريقة الرسمية للـ Webhook اللي كتفتح المنفذ لـ Render تلقائياً وكتخليه Live
+if RENDER_EXTERNAL_URL:
+    print(f"🌐 Running with Webhook on port {PORT}...")
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        secret_token="MySuperSecretToken123", # حماية إضافية للبوت
+        webhook_url=f"{RENDER_EXTERNAL_URL}/"
+    )
+else:
+    # يلا جربتيه محلياً ف الحاسوب (Local) يشتغل عادي بـ Polling
+    print("💻 RENDER_EXTERNAL_URL not found, running with Polling...")
+    app.run_polling()
