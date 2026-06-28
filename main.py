@@ -1,4 +1,4 @@
-from __future__ import annotations
+From __future__ import annotations
 import os
 import re
 import psycopg2
@@ -282,51 +282,6 @@ async def cmd_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=build_drivers_keyboard(drivers, full_text)
     )
 
-async def delete_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in ADMIN_IDS:
-        await update.message.reply_text("❌ هاد الأمر مخصص للأدمن فقط.")
-        return
-
-    order_id_to_delete = None
-    msg_to_delete_id = None
-
-    if update.message.reply_to_message:
-        msg_to_delete_id = update.message.reply_to_message.message_id
-        order = db_get_order(msg_to_delete_id)
-        if order:
-            order_id_to_delete = order["number"]
-        else:
-            await update.message.reply_text("⚠️ هاد الميساج ما مرابطش بشي طلبية ف الداتابيز.")
-            return
-    else:
-        args = context.args
-        if not args or not args[0].isdigit():
-            await update.message.reply_text("⚠️ الطريقة الصحيحة:\n`/delete [رقم_الطلبية]` أو دير Reply على ميساج الطلبية وكتب `/delete`")
-            return
-        order_id_to_delete = int(args[0])
-        
-        with get_conn() as conn:
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute("SELECT group_msg_id FROM orders WHERE number = %s", (order_id_to_delete,))
-                row = cur.fetchone()
-                if row:
-                    msg_to_delete_id = row["group_msg_id"]
-
-    if not msg_to_delete_id or not order_id_to_delete:
-        await update.message.reply_text(f"❌ مالقيت حتى طلبية برقم #{order_id_to_delete} ف السيستم.")
-        return
-
-    db_clear_specific_order(msg_to_delete_id)
-
-    try:
-        await context.bot.delete_message(chat_id=GROUP_CHAT_ID, message_id=msg_to_delete_id)
-        success_msg = f"🗑️ تم حذف الطلبية #{order_id_to_delete} من الداتابيز والجروب بنجاح."
-    except Exception:
-        success_msg = f"🗑️ تم حذف الطلبية #{order_id_to_delete} من الداتابيز (تعذر مسح الميساج من الجروب تلقائياً)."
-
-    await update.message.reply_text(success_msg)
-
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user = query.from_user.first_name or query.from_user.username or "ليفرور"
@@ -368,9 +323,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 international_phone = "+212" + clean_digits[1:]
                 formatted_text = formatted_text.replace(p, international_phone)
 
-        part1 = "🎯 طلبية موجهة ليك ديريكت من الأدمن: " + str(admin_name)
-        part2 = f"\n🔢 طلبية #{counter}\n🕒 {now}\n\n📦 تفاصيل الطلبية:\n\n"
-        final_text = part1 + part2 + str(formatted_text)
+        final_text = f"🎯 طلبية موجهة ليك ديريكت من الأدمن: {admin_name}\n🔢 طلبية #{counter}\n🕒 {now}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
 
         try:
             private_msg = await context.bot.send_message(
@@ -427,10 +380,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 formatted_text = formatted_text.replace(p, international_phone)
 
         origin_admin = order.get("admin_name") or "الأدمن"
-        
-        t_part1 = "✅ خديتيها بنجاح:\n"
-        t_part2 = f"🔢 طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 تفاصيل الطلبية:\n\n"
-        final_text = t_part1 + t_part2 + str(formatted_text)
+        final_text = f"✅ خديتيها بنجاح:\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
 
         try:
             await query.edit_message_text(
@@ -481,13 +431,8 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             time_taken_str = "غير محدد"
 
         origin_admin = order.get("admin_name") or "الأدمن"
-        
-        d_part1 = f"🏁 تليفرات بواسطة: {order['taken_by']}\n"
-        d_part2 = f"🔢 طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 الطلبية:\n\n"
-        d_part3 = f"\n⏱️ الوقت المستغرق: {time_taken_str}"
-        
         await query.edit_message_text(  
-            text=d_part1 + d_part2 + str(order['text']) + d_part3
+            text=f"🏁 تليفرات بواسطة: {order['taken_by']}\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 الطلبية:\n\n{order['text']}\n⏱️ الوقت المستغرق: {time_taken_str}"  
         )  
         await query.answer("✅ تم تأكيد التوصيل")  
 
@@ -511,4 +456,51 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         order["taken"] = False  
         order["taken_by"] = None  
- 
+        order["taken_by_id"] = None  
+
+        origin_admin = order.get("admin_name") or "الأدمن"
+        try:
+            new_group_msg = await context.bot.send_message(
+                chat_id=GROUP_CHAT_ID,
+                text=f"🔄 (رجعات خاوية) طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 الطلبية:\n\n{order['text']}",
+                reply_markup=build_keyboard(taken=False)
+            )
+            db_clear_specific_order(msg_id)
+            db_save_order(new_group_msg.message_id, order)
+        except Exception as e:
+            print(f"Error re-sending to group: {e}")
+
+        await query.message.delete()
+        await query.answer("❌ تم الإلغاء، الطلبية رجعات للجروب.")
+
+        for admin_id in ADMIN_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=f"❌ إشعار جديد:\nالطلبية #{order['number']} تلغات من طرف {taken_by} ورجعات للجروب خاوية.",
+                )
+            except Exception as e:
+                print(f"Error sending admin notification: {e}")
+
+
+async def list_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    all_orders = db_get_all_orders()
+    if not all_orders:
+        await update.message.reply_text("📋 ما كاين حتى طلبية دابا!")
+        return
+
+    msg = "📋 لائحة الطلبيات اليومية\n━━━━━━━━━━━━━━━\n"
+    for i, o in enumerate(all_orders):  
+        origin_admin = o.get("admin_name") or "الأدمن"
+        status_line = f"🟩 [#{o['number']}] 🕒 {o['time']} (👤 {origin_admin})" if o["done"] else (f"🟦 [#{o['number']}] 🕒 {o['time']} 👤 قيد التوصيل ({o['taken_by']}) [من {origin_admin}]" if o["taken"] else f"🟧 [#{o['number']}] 🕒 {o['time']} (👤 {origin_admin})")
+        msg += f"{status_line}\n📝 {o['text']}\n"
+        if i < len(all_orders) - 1:
+            msg += "────────────────\n"
+    msg += "━━━━━━━━━━━━━━━"  
+    await update.message.reply_text(msg)
+
+async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_name = update.effective_user.first_name
+
+    all_orders = db_get_all_orders()
