@@ -368,7 +368,9 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 international_phone = "+212" + clean_digits[1:]
                 formatted_text = formatted_text.replace(p, international_phone)
 
-        final_text = f"🎯 طلبية موجهة ليك ديريكت من الأدمن: {admin_name}\n🔢 طلبية #{counter}\n🕒 {now}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
+        part1 = "🎯 طلبية موجهة ليك ديريكت من الأدمن: " + str(admin_name)
+        part2 = f"\n🔢 طلبية #{counter}\n🕒 {now}\n\n📦 تفاصيل الطلبية:\n\n"
+        final_text = part1 + part2 + str(formatted_text)
 
         try:
             private_msg = await context.bot.send_message(
@@ -425,7 +427,10 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 formatted_text = formatted_text.replace(p, international_phone)
 
         origin_admin = order.get("admin_name") or "الأدمن"
-        final_text = f"✅ خديتيها بنجاح:\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
+        
+        t_part1 = "✅ خديتيها بنجاح:\n"
+        t_part2 = f"🔢 طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 تفاصيل الطلبية:\n\n"
+        final_text = t_part1 + t_part2 + str(formatted_text)
 
         try:
             await query.edit_message_text(
@@ -476,8 +481,13 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             time_taken_str = "غير محدد"
 
         origin_admin = order.get("admin_name") or "الأدمن"
+        
+        d_part1 = f"🏁 تليفرات بواسطة: {order['taken_by']}\n"
+        d_part2 = f"🔢 طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 الطلبية:\n\n"
+        d_part3 = f"\n⏱️ الوقت المستغرق: {time_taken_str}"
+        
         await query.edit_message_text(  
-            text=f"🏁 تليفرات بواسطة: {order['taken_by']}\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 الطلبية:\n\n{order['text']}\n⏱️ الوقت المستغرق: {time_taken_str}"  
+            text=d_part1 + d_part2 + str(order['text']) + d_part3
         )  
         await query.answer("✅ تم تأكيد التوصيل")  
 
@@ -501,10 +511,4 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         order["taken"] = False  
         order["taken_by"] = None  
-        order["taken_by_id"] = None  
-
-        origin_admin = order.get("admin_name") or "الأدمن"
-        try:
-            new_group_msg = await context.bot.send_message(
-                chat_id=GROUP_CHAT_ID,
-                text=f"🔄 (رجعات خاو
+ 
