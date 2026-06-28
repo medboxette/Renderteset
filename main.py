@@ -16,13 +16,9 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL environment variable is not set")
 
-# 🚨 إعدادات Render والـ Webhook
-# الرابط ديال الخدمة ديالك على رندر (مثال: https://my-bot.onrender.com)
-RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL") 
-# الـ Port اللي كيعطيه رندر ديريكت للخدمة (غالباً 10000 أو اللي تحدد)
+RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
 PORT = int(os.environ.get("PORT", 8080))
 
-# الـ IDs ديال الأدمنز والجروب
 ADMIN_IDS = [6243248782, 8373828587]
 GROUP_CHAT_ID = -1003929375047  
 
@@ -205,6 +201,9 @@ def build_keyboard(taken: bool):
         ]
     ])
 
+def build_only_take_keyboard():
+    return InlineKeyboardMarkup([[InlineKeyboardButton("خديتها 🚚", callback_data="take")]])
+
 def build_drivers_keyboard(drivers_list: list, order_text: str):
     buttons = []
     for d in drivers_list:
@@ -330,7 +329,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             private_msg = await context.bot.send_message(
                 chat_id=target_id,
                 text=final_text,
-                reply_markup=build_keyboard(taken=True)
+                reply_markup=build_only_take_keyboard()
             )
         except Exception as e:
             await query.edit_message_text(f"❌ فشل إرسال الطلبية لـ {driver_name}.\nError: {e}")
@@ -344,12 +343,11 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "time": now,  
             "taken": True,  
             "done": False,  
-            "taken_by": driver_name,  
+            "taken_by": None,  
             "taken_by_id": target_id,  
             "phone": phones_str,
             "admin_name": admin_name
         })
-        db_add_score(driver_name, +1, user_id=target_id)
         
         if 'pending_order_text' in context.user_data:
             del context.user_data['pending_order_text']
@@ -361,9 +359,15 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return  
 
     if data == "take":  
-        if order["taken"]:  
+        if order["taken"] and order.get("taken_by_id") != user_id:  
             await query.answer("❌ هاد الطلبية خداها شي واحد آخر", show_alert=True)  
             return  
+
+        if not order["taken"]:
+            order["taken"] = True  
+            order["taken_by"] = user  
+            order["taken_by_id"] = user_id
+            db_add_score(user, +1, user_id=user_id)
 
         formatted_text = order['text']
         raw_phones = re.findall(r'(?:\+212|0)[ \-_]*[567](?:[ \-_]*\d){8}', formatted_text)
@@ -379,29 +383,18 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         final_text = f"✅ خديتيها بنجاح:\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
 
         try:
-            private_msg = await context.bot.send_message(
-                chat_id=user_id,
+            await query.edit_message_text(
                 text=final_text,
                 reply_markup=build_keyboard(taken=True)
             )
         except Exception as e:
             await query.answer("⚠️ خاصك ضروري تدخل عند البوت ف الخاص ودير /start عاد تقدر تاخد الطلبيات!", show_alert=True)
             return
-
-        order["taken"] = True  
-        order["taken_by"] = user  
-        order["taken_by_id"] = user_id  
         
         db_clear_specific_order(msg_id)
-        db_save_order(private_msg.message_id, order)
-        db_add_score(user, +1, user_id=user_id)  
+        db_save_order(query.message.message_id, order)
 
-        try:
-            await context.bot.delete_message(chat_id=GROUP_CHAT_ID, message_id=msg_id)
-        except Exception as e:
-            print(f"Error deleting group message: {e}")
-
-        await query.answer("✅ خديتي الطلبية! شوف الخاص ديالك.")  
+        await query.answer("✅ خديتي الطلبية!")  
 
         for admin_id in ADMIN_IDS:
             try:
@@ -420,9 +413,26 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         order["done"] = True  
         db_save_order(msg_id, order)  
 
+        try:
+            start_time = datetime.strptime(order["time"], "%H:%M")
+            now_time = datetime.now()
+            start_time = start_time.replace(year=now_time.year, month=now_time.month, day=now_time.day)
+            
+            duration = now_time - start_time
+            duration_minutes = int(duration.total_seconds() / 60)
+            
+            if duration_minutes < 60:
+                time_taken_str = f"{duration_minutes} دقيقة"
+            else:
+                hours = duration_minutes // 60
+                mins = duration_minutes % 60
+                time_taken_str = f"{hours} ساعة و {mins} دقيقة"
+        except Exception:
+            time_taken_str = "غير محدد"
+
         origin_admin = order.get("admin_name") or "الأدمن"
         await query.edit_message_text(  
-            text=f"🏁 تليفرات بواسطة: {order['taken_by']}\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 الطلبية:\n\n{order['text']}"  
+            text=f"🏁 تليفرات بواسطة: {order['taken_by']}\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 الطلبية:\n\n{order['text']}\n⏱️ الوقت المستغرق: {time_taken_str}"  
         )  
         await query.answer("✅ تم تأكيد التوصيل")  
 
@@ -430,7 +440,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_message(
                     chat_id=admin_id,
-                    text=f"🏁 إشعار جديد:\nالطلبية #{order['number']} تليفرات بنجاح بواسطة {order['taken_by']}! 🎉",
+                    text=f"🏁 إشعار جديد:\nالطلبية #{order['number']} تليفرات بنجاح بواسطة {order['taken_by']}! 🎉\n⏱️ الوقت المستغرق: {time_taken_str}",
                 )
             except Exception as e:
                 print(f"Error sending admin notification: {e}")
@@ -472,7 +482,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 print(f"Error sending admin notification: {e}")
 
-# ── باقی الأوامر الإحصائية ──────────────────────────────────────────────────────
 
 async def list_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     all_orders = db_get_all_orders()
@@ -557,16 +566,14 @@ app.add_handler(CommandHandler("stats", stats))
 app.add_handler(CommandHandler("clear", clear))
 app.add_handler(CallbackQueryHandler(button))
 
-# 🚀 الطريقة الرسمية للـ Webhook اللي كتفتح المنفذ لـ Render تلقائياً وكتخليه Live
 if RENDER_EXTERNAL_URL:
     print(f"🌐 Running with Webhook on port {PORT}...")
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
-        secret_token="MySuperSecretToken123", # حماية إضافية للبوت
+        secret_token="MySuperSecretToken123",
         webhook_url=f"{RENDER_EXTERNAL_URL}/"
     )
 else:
-    # يلا جربتيه محلياً ف الحاسوب (Local) يشتغل عادي بـ Polling
     print("💻 RENDER_EXTERNAL_URL not found, running with Polling...")
     app.run_polling()
