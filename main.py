@@ -161,30 +161,6 @@ def db_get_all_drivers_with_id() -> list[dict]:
         print(f"Error fetching drivers: {e}")
         return []
 
-def db_get_stats() -> dict:
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM orders")
-            total = cur.fetchone()[0]
-            cur.execute("SELECT COUNT(*) FROM orders WHERE done = TRUE")
-            done = cur.fetchone()[0]
-            cur.execute("SELECT COUNT(*) FROM orders WHERE taken = TRUE AND done = FALSE")
-            in_progress = cur.fetchone()[0]
-            cur.execute("SELECT COUNT(*) FROM orders WHERE taken = FALSE AND done = FALSE")
-            waiting = cur.fetchone()[0]
-            return {"total": total, "done": done, "in_progress": in_progress, "waiting": waiting}
-
-def db_clear_all():
-    try:
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("DELETE FROM orders")
-                cur.execute("UPDATE scores SET score = 0")
-                cur.execute("UPDATE counter SET value = 0 WHERE id = 1")
-                conn.commit()
-    except Exception as e:
-        print(f"Error clearing db: {e}")
-
 def db_clear_specific_order(group_msg_id: int):
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -281,7 +257,7 @@ async def cmd_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=build_drivers_keyboard(drivers, full_text)
     )
 
-# 🆕 دالة الحذف الاحترافية والآمنة
+# 🛠️ دالة الحذف المصلحة والآمنة 100%
 async def delete_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
@@ -291,7 +267,6 @@ async def delete_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
     order_id_to_delete = None
     msg_to_delete_id = None
 
-    # الطريقة 1: إذا دار الأدمن Reply على الميساج ف الجروب
     if update.message.reply_to_message:
         msg_to_delete_id = update.message.reply_to_message.message_id
         order = db_get_order(msg_to_delete_id)
@@ -300,7 +275,6 @@ async def delete_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("⚠️ هاد الميساج ما مرابطش بشي طلبية ف الداتابيز.")
             return
-    # الطريقة 2: إذا كتب الرقم بحال /delete 3
     else:
         args = context.args
         if not args or not args[0].isdigit():
@@ -309,20 +283,19 @@ async def delete_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
         order_id_to_delete = int(args[0])
         
         with get_conn() as conn:
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            with conn.cursor() as cur:
+                # قراءة عادية وآمنة بدون RealDictCursor
                 cur.execute("SELECT group_msg_id FROM orders WHERE number = %s", (order_id_to_delete,))
                 row = cur.fetchone()
                 if row:
-                    msg_to_delete_id = row["group_msg_id"]
+                    msg_to_delete_id = row[0]
 
     if not msg_to_delete_id or not order_id_to_delete:
         await update.message.reply_text(f"❌ مالقيت حتى طلبية برقم #{order_id_to_delete} ف السيستم.")
         return
 
-    # مسح من الداتابيز ديريكت
     db_clear_specific_order(msg_to_delete_id)
 
-    # مسح الميساج من الجروب
     try:
         await context.bot.delete_message(chat_id=GROUP_CHAT_ID, message_id=msg_to_delete_id)
         await update.message.reply_text(f"🗑️ تم حذف الطلبية #{order_id_to_delete} من الداتابيز والجروب بنجاح.")
@@ -561,7 +534,7 @@ if __name__ == "__main__":
 
     app.add_handler(CommandHandler("cmd", cmd))
     app.add_handler(CommandHandler("cmd_to", cmd_to))
-    app.add_handler(CommandHandler("delete", delete_order))  # ربط الأمر الجديد هنا
+    app.add_handler(CommandHandler("delete", delete_order))  
     app.add_handler(CommandHandler("list", list_orders))
     app.add_handler(CommandHandler("my_orders", my_orders))
     app.add_handler(CallbackQueryHandler(button))
