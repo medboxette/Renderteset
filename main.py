@@ -53,7 +53,6 @@ def init_db():
             )
             """)
             
-            # فحص آمن لزيادة عمود user_id في جدول scores لتفادي أي كراش ف السيرفر
             try:
                 cur.execute("ALTER TABLE scores ADD COLUMN IF NOT EXISTS user_id BIGINT")
                 conn.commit()
@@ -145,13 +144,12 @@ def db_get_scores() -> list[tuple[str, int]]:
             cur.execute("SELECT username, score FROM scores ORDER BY score DESC")
             return cur.fetchall()
 
-def db_get_user_id_by_username(username: str) -> int:
-    username = username.replace("@", "").strip()
+def db_get_all_drivers_with_id() -> list[dict]:
+    # جلب كاع اللوافريا اللي عندهم آي دي مسجل ف القاعدة
     with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT user_id FROM scores WHERE username = %s OR username ILIKE %s", (username, username))
-            row = cur.fetchone()
-            return row[0] if row and row[0] else None
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT username, user_id FROM scores WHERE user_id IS NOT NULL")
+            return cur.fetchall()
 
 def db_get_stats() -> dict:
     with get_conn() as conn:
@@ -192,6 +190,15 @@ def build_keyboard(taken: bool):
             InlineKeyboardButton("❌ لغيتها", callback_data="cancel"),
         ]
     ])
+
+def build_drivers_keyboard(drivers_list: list, order_text: str):
+    # بناء أزرار اللوافريا بشكل تلقائي ديناميكي
+    buttons = []
+    for d in drivers_list:
+        # الكولباك داتا غاتحمل الآي دي ديال الليفرور
+        callback_data = f"assign_{d['user_id']}"
+        buttons.append([InlineKeyboardButton(f"👤 {d['username']}", callback_data=callback_data)])
+    return InlineKeyboardMarkup(buttons)
 
 # ── Handlers ──────────────────────────────────────────────────────────────────
 
@@ -246,67 +253,23 @@ async def cmd_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if full_text.startswith("/cmd_to"):
         full_text = full_text[7:].strip()
 
-    parts = full_text.split(maxsplit=1)
-    if len(parts) < 2:
-        await update.message.reply_text("⚠️ الطريقة الصحيحة:\n`/cmd_to username_أو_id تفاصيل الطلبية`", parse_mode="Markdown")
+    if not full_text:
+        await update.message.reply_text("⚠️ الطريقة الصحيحة:\n`/cmd_to تفاصيل الطلبية هنا...`")
         return
 
-    target_driver = parts[0].strip()
-    order_text = parts[1].strip()
-
-    target_id = None
-    driver_name = target_driver
-
-    if target_driver.isdigit():
-        target_id = int(target_driver)
-    else:
-        target_id = db_get_user_id_by_username(target_driver)
-
-    if not target_id:
-        await update.message.reply_text(f"❌ ما لقيتش هاد الليفرور ({target_driver}) ف السيستم.\nخاص يكون ديجا تفاعل مع البوت وضغط على /start أو خدا شي طلبية قبل.")
+    drivers = db_get_all_drivers_with_id()
+    if not drivers:
+        await update.message.reply_text("❌ ما كاين حتى ليفرور مسجل ف قاعدة البيانات حالياً.")
         return
 
-    found_phones = re.findall(r'(?:\+212|0)[ \-_]*[567](?:[ \-_]*\d){8}', order_text)
-    phones_str = ",".join(found_phones) if found_phones else None
+    # حفظ نص الطلبية مؤقتاً ف الـ user_data باش نجبدوها ملي تختار من الأزرار
+    context.user_data['pending_order_text'] = full_text
 
-    counter = db_increment_counter()  
-    now = datetime.now().strftime("%H:%M")  
-
-    formatted_text = order_text
-    raw_phones = re.findall(r'(?:\+212|0)[ \-_]*[567](?:[ \-_]*\d){8}', formatted_text)
-    for p in raw_phones:
-        clean_digits = re.sub(r'[\s\-_]', '', p)
-        if clean_digits.startswith('+212'):
-            clean_digits = '0' + clean_digits[4:]
-        if len(clean_digits) == 10 and clean_digits.startswith('0'):
-            international_phone = "+212" + clean_digits[1:]
-            formatted_text = formatted_text.replace(p, international_phone)
-
-    final_text = f"🎯 طلبية موجهة ليك ديريكت من الأدمن:\n🔢 طلبية #{counter}\n🕒 {now}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
-
-    try:
-        private_msg = await context.bot.send_message(
-            chat_id=target_id,
-            text=final_text,
-            reply_markup=build_keyboard(taken=True)
-        )
-    except Exception as e:
-        await update.message.reply_text(f"❌ فشل إرسال الطلبية لخاص الليفرور.\nError: {e}")
-        return
-
-    await update.message.reply_text(f"🚀 تم إرسال الطلبية #{counter} مباشرة إلى خاص الليفرور بنجاح.")
-
-    db_save_order(private_msg.message_id, {  
-        "number": counter,  
-        "text": order_text,  
-        "time": now,  
-        "taken": True,  
-        "done": False,  
-        "taken_by": driver_name,  
-        "taken_by_id": target_id,  
-        "phone": phones_str
-    })
-    db_add_score(driver_name, +1, user_id=target_id)
+    # إرسال أزرار اللوافريا للأدمن
+    await update.message.reply_text(
+        text="🚚 اختر الليفرور اللي بغيتي تصيفط ليه هاد الطلبية ديريكت:",
+        reply_markup=build_drivers_keyboard(drivers, full_text)
+    )
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -315,13 +278,78 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_id = query.message.message_id  
     data = query.data
 
-    order = db_get_order(msg_id)
+    # تسجيل وتحديث بيانات أي ليفرور ضغط على زرار
+    db_add_score(user, 0, user_id=user_id)
 
+    # معالجة اختيار الأدمن لليفرور محدد
+    if data.startswith("assign_"):
+        if user_id not in ADMIN_IDS:
+            await query.answer("❌ أنت لس الأدمن", show_alert=True)
+            return
+
+        target_id = int(data.split("_")[1])
+        order_text = context.user_data.get('pending_order_text')
+
+        if not order_text:
+            await query.edit_message_text("⚠️ انتهت صلاحية الجلسة، عاود اكتب الأمر من جديد.")
+            return
+
+        # البحث عن اسم الليفرور بناء على الـ ID المختار
+        drivers = db_get_all_drivers_with_id()
+        driver_name = next((d['username'] for d in drivers if d['user_id'] == target_id), "ليفرور")
+
+        found_phones = re.findall(r'(?:\+212|0)[ \-_]*[567](?:[ \-_]*\d){8}', order_text)
+        phones_str = ",".join(found_phones) if found_phones else None
+
+        counter = db_increment_counter()  
+        now = datetime.now().strftime("%H:%M")  
+
+        # تنظيف وتحويل الأرقام ديريكت
+        formatted_text = order_text
+        raw_phones = re.findall(r'(?:\+212|0)[ \-_]*[567](?:[ \-_]*\d){8}', formatted_text)
+        for p in raw_phones:
+            clean_digits = re.sub(r'[\s\-_]', '', p)
+            if clean_digits.startswith('+212'):
+                clean_digits = '0' + clean_digits[4:]
+            if len(clean_digits) == 10 and clean_digits.startswith('0'):
+                international_phone = "+212" + clean_digits[1:]
+                formatted_text = formatted_text.replace(p, international_phone)
+
+        final_text = f"🎯 طلبية موجهة ليك ديريكت من الأدمن:\n🔢 طلبية #{counter}\n🕒 {now}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
+
+        try:
+            private_msg = await context.bot.send_message(
+                chat_id=target_id,
+                text=final_text,
+                reply_markup=build_keyboard(taken=True)
+            )
+        except Exception as e:
+            await query.edit_message_text(f"❌ فشل إرسال الطلبية لـ {driver_name}.\nError: {e}")
+            return
+
+        await query.edit_message_text(f"🚀 تم إرسال الطلبية #{counter} مباشرة إلى خاص ({driver_name}) بنجاح.")
+
+        db_save_order(private_msg.message_id, {  
+            "number": counter,  
+            "text": order_text,  
+            "time": now,  
+            "taken": True,  
+            "done": False,  
+            "taken_by": driver_name,  
+            "taken_by_id": target_id,  
+            "phone": phones_str
+        })
+        db_add_score(driver_name, +1, user_id=target_id)
+        
+        # مسح النص المؤقت بعد النجاح
+        if 'pending_order_text' in context.user_data:
+            del context.user_data['pending_order_text']
+        return
+
+    order = db_get_order(msg_id)
     if not order:  
         await query.answer("⚠️ هاد الطلبية ما كايناش ف السيستم أو قديمة", show_alert=True)  
         return  
-
-    db_add_score(user, 0, user_id=user_id)
 
     if data == "take":  
         if order["taken"]:  
@@ -330,12 +358,10 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         formatted_text = order['text']
         raw_phones = re.findall(r'(?:\+212|0)[ \-_]*[567](?:[ \-_]*\d){8}', formatted_text)
-        
         for p in raw_phones:
             clean_digits = re.sub(r'[\s\-_]', '', p)
             if clean_digits.startswith('+212'):
                 clean_digits = '0' + clean_digits[4:]
-                
             if len(clean_digits) == 10 and clean_digits.startswith('0'):
                 international_phone = "+212" + clean_digits[1:]
                 formatted_text = formatted_text.replace(p, international_phone)
