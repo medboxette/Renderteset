@@ -1,4 +1,3 @@
-from __future__ import annotations
 import os
 import re
 import psycopg2
@@ -16,14 +15,10 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL environment variable is not set")
 
-# 🚨 إعدادات Render والـ Webhook
-# الرابط ديال الخدمة ديالك على رندر (مثال: https://my-bot.onrender.com)
-RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL") 
-# الـ Port اللي كيعطيه رندر ديريكت للخدمة (غالباً 10000 أو اللي تحدد)
-PORT = int(os.environ.get("PORT", 8080))
-
-# الـ IDs ديال الأدمنز والجروب
+# 🚨 الـ IDs ديال الأدمنز
 ADMIN_IDS = [6243248782, 8373828587]
+
+# 🌐 الـ ID ديال الجروب
 GROUP_CHAT_ID = -1003929375047  
 
 # ── Database ──────────────────────────────────────────────────────────────────
@@ -35,6 +30,7 @@ def init_db():
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
+                # 1. إنشاء جدول الطلبيات
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS orders (
                     group_msg_id BIGINT PRIMARY KEY,
@@ -45,15 +41,11 @@ def init_db():
                     done        BOOLEAN NOT NULL DEFAULT FALSE,
                     taken_by    TEXT,
                     taken_by_id BIGINT,
-                    phone       TEXT,
-                    admin_name  TEXT
+                    phone       TEXT
                 )
                 """)
-                try:
-                    cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS admin_name TEXT")
-                except Exception:
-                    pass
                 
+                # 2. إنشاء جدول النقاط
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS scores (
                     username TEXT PRIMARY KEY,
@@ -61,23 +53,27 @@ def init_db():
                     user_id  BIGINT
                 )
                 """)
+                
                 try:
                     cur.execute("ALTER TABLE scores ADD COLUMN IF NOT EXISTS user_id BIGINT")
+                    conn.commit()
                 except Exception:
-                    pass
+                    conn.rollback()
 
-                cur.execute("""
-                CREATE TABLE IF NOT EXISTS counter (
-                    id    INTEGER PRIMARY KEY DEFAULT 1,
-                    value INTEGER NOT NULL DEFAULT 0
-                )
-                """)
-                cur.execute("""
-                INSERT INTO counter (id, value)
-                VALUES (1, 0)
-                ON CONFLICT (id) DO NOTHING
-                """)
-            conn.commit()
+                # 3. إنشاء العداد
+                with conn.cursor() as cur2:
+                    cur2.execute("""
+                    CREATE TABLE IF NOT EXISTS counter (
+                        id    INTEGER PRIMARY KEY DEFAULT 1,
+                        value INTEGER NOT NULL DEFAULT 0
+                    )
+                    """)
+                    cur2.execute("""
+                    INSERT INTO counter (id, value)
+                    VALUES (1, 0)
+                    ON CONFLICT (id) DO NOTHING
+                    """)
+                    conn.commit()
         print("✅ Database initialized safely")
     except Exception as e:
         print(f"⚠️ Error during database initialization: {e}")
@@ -94,15 +90,14 @@ def db_save_order(group_msg_id: int, order: dict):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-            INSERT INTO orders (group_msg_id, number, text, time, taken, done, taken_by, taken_by_id, phone, admin_name)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO orders (group_msg_id, number, text, time, taken, done, taken_by, taken_by_id, phone)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (group_msg_id) DO UPDATE SET
                 taken       = EXCLUDED.taken,
                 done        = EXCLUDED.done,
                 taken_by    = EXCLUDED.taken_by,
                 taken_by_id = EXCLUDED.taken_by_id,
-                phone       = EXCLUDED.phone,
-                admin_name  = EXCLUDED.admin_name
+                phone       = EXCLUDED.phone
             """, (
                 group_msg_id,
                 order["number"],
@@ -112,8 +107,7 @@ def db_save_order(group_msg_id: int, order: dict):
                 order["done"],
                 order["taken_by"],
                 order["taken_by_id"],
-                order.get("phone"),
-                order.get("admin_name")
+                order.get("phone")
             ))
             conn.commit()
 
@@ -198,6 +192,7 @@ def db_clear_specific_order(group_msg_id: int):
 def build_keyboard(taken: bool):
     if not taken:
         return InlineKeyboardMarkup([[InlineKeyboardButton("خديتها 🚚", callback_data="take")]])
+        
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🏁 تليفرات", callback_data="done"),
@@ -218,7 +213,6 @@ async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != "private":
         return
 
-    admin_name = update.effective_user.first_name or "الأدمن"
     text = update.message.text.strip()
     if text.startswith("/cmd"):
         text = text[4:].strip()
@@ -236,7 +230,7 @@ async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         group_msg = await context.bot.send_message(
             chat_id=GROUP_CHAT_ID,
-            text=f"🔢 طلبية #{counter}\n🕒 {now}\n👤 بواسطة: {admin_name}\n\n📦 طلبية جديدة:\n\n{text}",
+            text=f"🔢 طلبية #{counter}\n🕒 {now}\n\n📦 طلبية جديدة:\n\n{text}",
             reply_markup=build_keyboard(taken=False),
         )
     except Exception as e:
@@ -253,8 +247,7 @@ async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "done": False,  
         "taken_by": None,  
         "taken_by_id": None,  
-        "phone": phones_str,
-        "admin_name": admin_name
+        "phone": phones_str
     })
 
 async def cmd_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -297,7 +290,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ أنت لست الأدمن", show_alert=True)
             return
 
-        admin_name = query.from_user.first_name or "الأدمن"
         target_id = int(data.split("_")[1])
         order_text = context.user_data.get('pending_order_text')
 
@@ -324,7 +316,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 international_phone = "+212" + clean_digits[1:]
                 formatted_text = formatted_text.replace(p, international_phone)
 
-        final_text = f"🎯 طلبية موجهة ليك ديريكت من الأدمن: {admin_name}\n🔢 طلبية #{counter}\n🕒 {now}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
+        final_text = f"🎯 طلبية موجهة ليك ديريكت من الأدمن:\n🔢 طلبية #{counter}\n🕒 {now}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
 
         try:
             private_msg = await context.bot.send_message(
@@ -346,8 +338,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "done": False,  
             "taken_by": driver_name,  
             "taken_by_id": target_id,  
-            "phone": phones_str,
-            "admin_name": admin_name
+            "phone": phones_str
         })
         db_add_score(driver_name, +1, user_id=target_id)
         
@@ -375,8 +366,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 international_phone = "+212" + clean_digits[1:]
                 formatted_text = formatted_text.replace(p, international_phone)
 
-        origin_admin = order.get("admin_name") or "الأدمن"
-        final_text = f"✅ خديتيها بنجاح:\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
+        final_text = f"✅ خديتيها بنجاح:\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
 
         try:
             private_msg = await context.bot.send_message(
@@ -385,6 +375,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=build_keyboard(taken=True)
             )
         except Exception as e:
+            print(f"Error sending private message: {e}")
             await query.answer("⚠️ خاصك ضروري تدخل عند البوت ف الخاص ودير /start عاد تقدر تاخد الطلبيات!", show_alert=True)
             return
 
@@ -407,7 +398,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_message(
                     chat_id=admin_id,
-                    text=f"🚚 إشعار جديد:\nالليفرور {user} خدا الطلبية #{order['number']} (بواسطة: {origin_admin})\n\n📦 الطلبية: {order['text']}",
+                    text=f"🚚 إشعار جديد:\nالليفرور {user} خدا الطلبية #{order['number']}\n\n📦 الطلبية: {order['text']}",
                 )
             except Exception as e:
                 print(f"Error sending admin notification: {e}")
@@ -420,9 +411,8 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         order["done"] = True  
         db_save_order(msg_id, order)  
 
-        origin_admin = order.get("admin_name") or "الأدمن"
         await query.edit_message_text(  
-            text=f"🏁 تليفرات بواسطة: {order['taken_by']}\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 الطلبية:\n\n{order['text']}"  
+            text=f"🏁 تليفرات بواسطة: {order['taken_by']}\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 الطلبية:\n\n{order['text']}"  
         )  
         await query.answer("✅ تم تأكيد التوصيل")  
 
@@ -448,11 +438,10 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         order["taken_by"] = None  
         order["taken_by_id"] = None  
 
-        origin_admin = order.get("admin_name") or "الأدمن"
         try:
             new_group_msg = await context.bot.send_message(
                 chat_id=GROUP_CHAT_ID,
-                text=f"🔄 (رجعات خاوية) طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 الطلبية:\n\n{order['text']}",
+                text=f"🔄 (رجعات خاوية) طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 الطلبية:\n\n{order['text']}",
                 reply_markup=build_keyboard(taken=False)
             )
             db_clear_specific_order(msg_id)
@@ -472,7 +461,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 print(f"Error sending admin notification: {e}")
 
-# ── باقی الأوامر الإحصائية ──────────────────────────────────────────────────────
+# ── باقي الأوامر الإحصائية ──────────────────────────────────────────────────────
 
 async def list_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     all_orders = db_get_all_orders()
@@ -482,8 +471,7 @@ async def list_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = "📋 لائحة الطلبيات اليومية\n━━━━━━━━━━━━━━━\n"
     for i, o in enumerate(all_orders):  
-        origin_admin = o.get("admin_name") or "الأدمن"
-        status_line = f"🟩 [#{o['number']}] 🕒 {o['time']} (👤 {origin_admin})" if o["done"] else (f"🟦 [#{o['number']}] 🕒 {o['time']} 👤 قيد التوصيل ({o['taken_by']}) [من {origin_admin}]" if o["taken"] else f"🟧 [#{o['number']}] 🕒 {o['time']} (👤 {origin_admin})")
+        status_line = f"🟩 [#{o['number']}] 🕒 {o['time']}" if o["done"] else (f"🟦 [#{o['number']}] 🕒 {o['time']} 👤 قيد التوصيل ({o['taken_by']})" if o["taken"] else f"🟧 [#{o['number']}] 🕒 {o['time']}")
         msg += f"{status_line}\n📝 {o['text']}\n"
         if i < len(all_orders) - 1:
             msg += "────────────────\n"
@@ -503,8 +491,7 @@ async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = f"📦 الطلبيات ديال {user_name}:\n\n"  
     for o in mine:  
-        origin_admin = o.get("admin_name") or "الأدمن"
-        msg += f"#{o['number']} [{o['time']}] (من: {origin_admin}) {'🏁 تليفرات' if o['done'] else '✅ قيد التوصيل'} — {o['text']}\n"  
+        msg += f"#{o['number']} [{o['time']}] {'🏁 تليفرات' if o['done'] else '✅ قيد التوصيل'} — {o['text']}\n"  
 
     await update.message.reply_text(msg)
 
@@ -546,7 +533,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 init_db()
 
 app = ApplicationBuilder().token(TOKEN).build()
-
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("cmd", cmd))
 app.add_handler(CommandHandler("cmd_to", cmd_to))
@@ -557,16 +543,6 @@ app.add_handler(CommandHandler("stats", stats))
 app.add_handler(CommandHandler("clear", clear))
 app.add_handler(CallbackQueryHandler(button))
 
-# 🚀 الطريقة الرسمية للـ Webhook اللي كتفتح المنفذ لـ Render تلقائياً وكتخليه Live
-if RENDER_EXTERNAL_URL:
-    print(f"🌐 Running with Webhook on port {PORT}...")
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        secret_token="MySuperSecretToken123", # حماية إضافية للبوت
-        webhook_url=f"{RENDER_EXTERNAL_URL}/"
-    )
-else:
-    # يلا جربتيه محلياً ف الحاسوب (Local) يشتغل عادي بـ Polling
-    print("💻 RENDER_EXTERNAL_URL not found, running with Polling...")
-    app.run_polling()
+print("✅ Bot running...")
+PORT = int(os.environ.get("PORT", 8080))
+app.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"https://renderteset-1.onrender.com/{TOKEN}")
