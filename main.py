@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os
 import re
 import psycopg2
@@ -15,10 +16,10 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL environment variable is not set")
 
-# 🚨 الـ IDs ديال الأدمنز
-ADMIN_IDS = [6243248782, 8373828587]
+RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
+PORT = int(os.environ.get("PORT", 8080))
 
-# 🌐 الـ ID ديال الجروب
+ADMIN_IDS = [6243248782, 8373828587]
 GROUP_CHAT_ID = -1003929375047  
 
 # ── Database ──────────────────────────────────────────────────────────────────
@@ -30,7 +31,6 @@ def init_db():
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
-                # 1. إنشاء جدول الطلبيات
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS orders (
                     group_msg_id BIGINT PRIMARY KEY,
@@ -41,11 +41,15 @@ def init_db():
                     done        BOOLEAN NOT NULL DEFAULT FALSE,
                     taken_by    TEXT,
                     taken_by_id BIGINT,
-                    phone       TEXT
+                    phone       TEXT,
+                    admin_name  TEXT
                 )
                 """)
+                try:
+                    cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS admin_name TEXT")
+                except Exception:
+                    pass
                 
-                # 2. إنشاء جدول النقاط
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS scores (
                     username TEXT PRIMARY KEY,
@@ -53,27 +57,23 @@ def init_db():
                     user_id  BIGINT
                 )
                 """)
-                
                 try:
                     cur.execute("ALTER TABLE scores ADD COLUMN IF NOT EXISTS user_id BIGINT")
-                    conn.commit()
                 except Exception:
-                    conn.rollback()
+                    pass
 
-                # 3. إنشاء العداد
-                with conn.cursor() as cur2:
-                    cur2.execute("""
-                    CREATE TABLE IF NOT EXISTS counter (
-                        id    INTEGER PRIMARY KEY DEFAULT 1,
-                        value INTEGER NOT NULL DEFAULT 0
-                    )
-                    """)
-                    cur2.execute("""
-                    INSERT INTO counter (id, value)
-                    VALUES (1, 0)
-                    ON CONFLICT (id) DO NOTHING
-                    """)
-                    conn.commit()
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS counter (
+                    id    INTEGER PRIMARY KEY DEFAULT 1,
+                    value INTEGER NOT NULL DEFAULT 0
+                )
+                """)
+                cur.execute("""
+                INSERT INTO counter (id, value)
+                VALUES (1, 0)
+                ON CONFLICT (id) DO NOTHING
+                """)
+            conn.commit()
         print("✅ Database initialized safely")
     except Exception as e:
         print(f"⚠️ Error during database initialization: {e}")
@@ -90,14 +90,15 @@ def db_save_order(group_msg_id: int, order: dict):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-            INSERT INTO orders (group_msg_id, number, text, time, taken, done, taken_by, taken_by_id, phone)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO orders (group_msg_id, number, text, time, taken, done, taken_by, taken_by_id, phone, admin_name)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (group_msg_id) DO UPDATE SET
                 taken       = EXCLUDED.taken,
                 done        = EXCLUDED.done,
                 taken_by    = EXCLUDED.taken_by,
                 taken_by_id = EXCLUDED.taken_by_id,
-                phone       = EXCLUDED.phone
+                phone       = EXCLUDED.phone,
+                admin_name  = EXCLUDED.admin_name
             """, (
                 group_msg_id,
                 order["number"],
@@ -107,7 +108,8 @@ def db_save_order(group_msg_id: int, order: dict):
                 order["done"],
                 order["taken_by"],
                 order["taken_by_id"],
-                order.get("phone")
+                order.get("phone"),
+                order.get("admin_name")
             ))
             conn.commit()
 
@@ -115,6 +117,13 @@ def db_get_order(group_msg_id: int):
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("SELECT * FROM orders WHERE group_msg_id = %s", (group_msg_id,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+def db_get_order_by_number(number: int):
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM orders WHERE number = %s", (number,))
             row = cur.fetchone()
             return dict(row) if row else None
 
@@ -192,13 +201,15 @@ def db_clear_specific_order(group_msg_id: int):
 def build_keyboard(taken: bool):
     if not taken:
         return InlineKeyboardMarkup([[InlineKeyboardButton("خديتها 🚚", callback_data="take")]])
-        
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🏁 تليفرات", callback_data="done"),
             InlineKeyboardButton("❌ لغيتها", callback_data="cancel"),
         ]
     ])
+
+def build_only_take_keyboard():
+    return InlineKeyboardMarkup([[InlineKeyboardButton("خديتها 🚚", callback_data="take")]])
 
 def build_drivers_keyboard(drivers_list: list, order_text: str):
     buttons = []
@@ -213,6 +224,7 @@ async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != "private":
         return
 
+    admin_name = update.effective_user.first_name or "الأدمن"
     text = update.message.text.strip()
     if text.startswith("/cmd"):
         text = text[4:].strip()
@@ -230,7 +242,7 @@ async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         group_msg = await context.bot.send_message(
             chat_id=GROUP_CHAT_ID,
-            text=f"🔢 طلبية #{counter}\n🕒 {now}\n\n📦 طلبية جديدة:\n\n{text}",
+            text=f"🔢 طلبية #{counter}\n🕒 {now}\n👤 بواسطة: {admin_name}\n\n📦 طلبية جديدة:\n\n{text}",
             reply_markup=build_keyboard(taken=False),
         )
     except Exception as e:
@@ -247,7 +259,8 @@ async def cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "done": False,  
         "taken_by": None,  
         "taken_by_id": None,  
-        "phone": phones_str
+        "phone": phones_str,
+        "admin_name": admin_name
     })
 
 async def cmd_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -276,6 +289,35 @@ async def cmd_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=build_drivers_keyboard(drivers, full_text)
     )
 
+async def delete_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ هاد الأمر مخصص للأدمن فقط.")
+        return
+
+    if not context.args:
+        await update.message.reply_text("⚠️ الطريقة الصحيحة: `/delete رقم_الطلبية`\nمثال: `/delete 5`")
+        return
+
+    try:
+        order_num = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("⚠️ يرجى إدخال رقم طلبية صحيح.")
+        return
+
+    order = db_get_order_by_number(order_num)
+    if not order:
+        await update.message.reply_text(f"⚠️ الطلبية #{order_num} ما كايناش ف السيستم.")
+        return
+
+    msg_id = order["group_msg_id"]
+    db_clear_specific_order(msg_id)
+
+    try:
+        await context.bot.delete_message(chat_id=GROUP_CHAT_ID, message_id=msg_id)
+        await update.message.reply_text(f"🗑️ تم مسح الطلبية #{order_num} بنجاح من قاعدة البيانات ومن الجروب.")
+    except Exception:
+        await update.message.reply_text(f"🗑️ تم مسح الطلبية #{order_num} من قاعدة البيانات (رسالة الجروب قد تكون ممسوحة مسبقاً أو تحولت للخاص).")
+
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user = query.from_user.first_name or query.from_user.username or "ليفرور"
@@ -290,6 +332,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ أنت لست الأدمن", show_alert=True)
             return
 
+        admin_name = query.from_user.first_name or "الأدمن"
         target_id = int(data.split("_")[1])
         order_text = context.user_data.get('pending_order_text')
 
@@ -316,13 +359,13 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 international_phone = "+212" + clean_digits[1:]
                 formatted_text = formatted_text.replace(p, international_phone)
 
-        final_text = f"🎯 طلبية موجهة ليك ديريكت من الأدمن:\n🔢 طلبية #{counter}\n🕒 {now}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
+        final_text = f"🎯 طلبية موجهة ليك ديريكت من الأدمن: {admin_name}\n🔢 طلبية #{counter}\n🕒 {now}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
 
         try:
             private_msg = await context.bot.send_message(
                 chat_id=target_id,
                 text=final_text,
-                reply_markup=build_keyboard(taken=True)
+                reply_markup=build_only_take_keyboard()
             )
         except Exception as e:
             await query.edit_message_text(f"❌ فشل إرسال الطلبية لـ {driver_name}.\nError: {e}")
@@ -336,11 +379,11 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "time": now,  
             "taken": True,  
             "done": False,  
-            "taken_by": driver_name,  
+            "taken_by": None,  
             "taken_by_id": target_id,  
-            "phone": phones_str
+            "phone": phones_str,
+            "admin_name": admin_name
         })
-        db_add_score(driver_name, +1, user_id=target_id)
         
         if 'pending_order_text' in context.user_data:
             del context.user_data['pending_order_text']
@@ -352,9 +395,15 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return  
 
     if data == "take":  
-        if order["taken"]:  
+        if order["taken"] and order.get("taken_by_id") != user_id:  
             await query.answer("❌ هاد الطلبية خداها شي واحد آخر", show_alert=True)  
             return  
+
+        if not order["taken"]:
+            order["taken"] = True  
+            order["taken_by"] = user  
+            order["taken_by_id"] = user_id
+            db_add_score(user, +1, user_id=user_id)
 
         formatted_text = order['text']
         raw_phones = re.findall(r'(?:\+212|0)[ \-_]*[567](?:[ \-_]*\d){8}', formatted_text)
@@ -366,39 +415,28 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 international_phone = "+212" + clean_digits[1:]
                 formatted_text = formatted_text.replace(p, international_phone)
 
-        final_text = f"✅ خديتيها بنجاح:\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
+        origin_admin = order.get("admin_name") or "الأدمن"
+        final_text = f"✅ خديتيها بنجاح:\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
 
         try:
-            private_msg = await context.bot.send_message(
-                chat_id=user_id,
+            await query.edit_message_text(
                 text=final_text,
                 reply_markup=build_keyboard(taken=True)
             )
         except Exception as e:
-            print(f"Error sending private message: {e}")
             await query.answer("⚠️ خاصك ضروري تدخل عند البوت ف الخاص ودير /start عاد تقدر تاخد الطلبيات!", show_alert=True)
             return
-
-        order["taken"] = True  
-        order["taken_by"] = user  
-        order["taken_by_id"] = user_id  
         
         db_clear_specific_order(msg_id)
-        db_save_order(private_msg.message_id, order)
-        db_add_score(user, +1, user_id=user_id)  
+        db_save_order(query.message.message_id, order)
 
-        try:
-            await context.bot.delete_message(chat_id=GROUP_CHAT_ID, message_id=msg_id)
-        except Exception as e:
-            print(f"Error deleting group message: {e}")
-
-        await query.answer("✅ خديتي الطلبية! شوف الخاص ديالك.")  
+        await query.answer("✅ خديتي الطلبية!")  
 
         for admin_id in ADMIN_IDS:
             try:
                 await context.bot.send_message(
                     chat_id=admin_id,
-                    text=f"🚚 إشعار جديد:\nالليفرور {user} خدا الطلبية #{order['number']}\n\n📦 الطلبية: {order['text']}",
+                    text=f"🚚 إشعار جديد:\nالليفرور {user} خدا الطلبية #{order['number']} (بواسطة: {origin_admin})\n\n📦 الطلبية: {order['text']}",
                 )
             except Exception as e:
                 print(f"Error sending admin notification: {e}")
@@ -411,8 +449,26 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         order["done"] = True  
         db_save_order(msg_id, order)  
 
+        try:
+            start_time = datetime.strptime(order["time"], "%H:%M")
+            now_time = datetime.now()
+            start_time = start_time.replace(year=now_time.year, month=now_time.month, day=now_time.day)
+            
+            duration = now_time - start_time
+            duration_minutes = int(duration.total_seconds() / 60)
+            
+            if duration_minutes < 60:
+                time_taken_str = f"{duration_minutes} دقيقة"
+            else:
+                hours = duration_minutes // 60
+                mins = duration_minutes % 60
+                time_taken_str = f"{hours} ساعة و {mins} دقيقة"
+        except Exception:
+            time_taken_str = "غير محدد"
+
+        origin_admin = order.get("admin_name") or "الأدمن"
         await query.edit_message_text(  
-            text=f"🏁 تليفرات بواسطة: {order['taken_by']}\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 الطلبية:\n\n{order['text']}"  
+            text=f"🏁 تليفرات بواسطة: {order['taken_by']}\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 الطلبية:\n\n{order['text']}\n⏱️ الوقت المستغرق: {time_taken_str}"  
         )  
         await query.answer("✅ تم تأكيد التوصيل")  
 
@@ -420,7 +476,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_message(
                     chat_id=admin_id,
-                    text=f"🏁 إشعار جديد:\nالطلبية #{order['number']} تليفرات بنجاح بواسطة {order['taken_by']}! 🎉",
+                    text=f"🏁 إشعار جديد:\nالطلبية #{order['number']} تليفرات بنجاح بواسطة {order['taken_by']}! 🎉\n⏱️ الوقت المستغرق: {time_taken_str}",
                 )
             except Exception as e:
                 print(f"Error sending admin notification: {e}")
@@ -438,10 +494,11 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         order["taken_by"] = None  
         order["taken_by_id"] = None  
 
+        origin_admin = order.get("admin_name") or "الأدمن"
         try:
             new_group_msg = await context.bot.send_message(
                 chat_id=GROUP_CHAT_ID,
-                text=f"🔄 (رجعات خاوية) طلبية #{order['number']}\n🕒 {order['time']}\n\n📦 الطلبية:\n\n{order['text']}",
+                text=f"🔄 (رجعات خاوية) طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 الطلبية:\n\n{order['text']}",
                 reply_markup=build_keyboard(taken=False)
             )
             db_clear_specific_order(msg_id)
@@ -450,99 +507,4 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             print(f"Error re-sending to group: {e}")
 
         await query.message.delete()
-        await query.answer("❌ تم الإلغاء، الطلبية رجعات للجروب.")
-
-        for admin_id in ADMIN_IDS:
-            try:
-                await context.bot.send_message(
-                    chat_id=admin_id,
-                    text=f"❌ إشعار جديد:\nالطلبية #{order['number']} تلغات من طرف {taken_by} ورجعات للجروب خاوية.",
-                )
-            except Exception as e:
-                print(f"Error sending admin notification: {e}")
-
-# ── باقي الأوامر الإحصائية ──────────────────────────────────────────────────────
-
-async def list_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    all_orders = db_get_all_orders()
-    if not all_orders:
-        await update.message.reply_text("📋 ما كاين حتى طلبية دابا!")
-        return
-
-    msg = "📋 لائحة الطلبيات اليومية\n━━━━━━━━━━━━━━━\n"
-    for i, o in enumerate(all_orders):  
-        status_line = f"🟩 [#{o['number']}] 🕒 {o['time']}" if o["done"] else (f"🟦 [#{o['number']}] 🕒 {o['time']} 👤 قيد التوصيل ({o['taken_by']})" if o["taken"] else f"🟧 [#{o['number']}] 🕒 {o['time']}")
-        msg += f"{status_line}\n📝 {o['text']}\n"
-        if i < len(all_orders) - 1:
-            msg += "────────────────\n"
-    msg += "━━━━━━━━━━━━━━━"  
-    await update.message.reply_text(msg)
-
-async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_name = update.effective_user.first_name
-
-    all_orders = db_get_all_orders()  
-    mine = [o for o in all_orders if o["taken_by_id"] == user_id]  
-
-    if not mine:  
-        await update.message.reply_text("📭 ما واخد حتى طلبية دابا.")  
-        return  
-
-    msg = f"📦 الطلبيات ديال {user_name}:\n\n"  
-    for o in mine:  
-        msg += f"#{o['number']} [{o['time']}] {'🏁 تليفرات' if o['done'] else '✅ قيد التوصيل'} — {o['text']}\n"  
-
-    await update.message.reply_text(msg)
-
-async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    all_scores = db_get_scores()
-    if not all_scores:
-        await update.message.reply_text("🏆 ما كاين حتى واحد خدا شي طلبية!")
-        return
-
-    msg = "🏆 لائحة المتصدرين:\n\n"  
-    medals = ["🥇", "🥈", "🥉"]  
-    for i, (username, score) in enumerate(all_scores):  
-        msg += f"{medals[i] if i < 3 else f'{i+1}.'} {username} — {score} طلبية\n"  
-
-    await update.message.reply_text(msg)
-
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    s = db_get_stats()
-    today = datetime.now().strftime("%d/%m/%Y")
-    msg = f"📊 إحصائيات الطلبيات — {today}\n\n📦 المجموع: {s['total']}\n🏁 تليفرات: {s['done']}\n✅ جارية: {s['in_progress']}\n⏳ مازال ما تشدات: {s['waiting']}"
-    await update.message.reply_text(msg)
-
-async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS:
-        await update.message.reply_text("❌ هاد الأمر مخصص للأدمن فقط.")
-        return
-
-    db_clear_all()  
-    await update.message.reply_text("🗑️ تم تصفير الطلبيات والسكورات بنجاح، واللوافريا بقاو مسجلين ف السيستم!")
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_name = update.effective_user.first_name or update.effective_user.username or "ليفرور"
-    db_add_score(user_name, 0, user_id=user_id)
-    await update.message.reply_text("👋 أهلاً بيك ف بوت إدارة الطلبيات!")
-
-# ── Main ──────────────────────────────────────────────────────────────────────
-
-init_db()
-
-app = ApplicationBuilder().token(TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("cmd", cmd))
-app.add_handler(CommandHandler("cmd_to", cmd_to))
-app.add_handler(CommandHandler("list", list_orders))
-app.add_handler(CommandHandler("myorders", my_orders))
-app.add_handler(CommandHandler("top", top))
-app.add_handler(CommandHandler("stats", stats))
-app.add_handler(CommandHandler("clear", clear))
-app.add_handler(CallbackQueryHandler(button))
-
-print("✅ Bot running...")
-PORT = int(os.environ.get("PORT", 8080))
-app.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"https://renderteset-1.onrender.com/{TOKEN}")
+        await query.answer("❌ تم الإ
