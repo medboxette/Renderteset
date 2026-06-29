@@ -507,4 +507,110 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             print(f"Error re-sending to group: {e}")
 
         await query.message.delete()
-        await query.answer("❌ تم الإ
+        await query.answer("❌ تم الإلغاء، الطلبية رجعات للجروب.")
+
+        for admin_id in ADMIN_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=f"❌ إشعار جديد:\nالطلبية #{order['number']} تلغات من طرف {taken_by} ورجعات للجروب خاوية.",
+                )
+            except Exception as e:
+                print(f"Error sending admin notification: {e}")
+
+
+async def list_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    all_orders = db_get_all_orders()
+    if not all_orders:
+        await update.message.reply_text("📋 ما كاين حتى طلبية دابا!")
+        return
+
+    msg = "📋 لائحة الطلبيات اليومية\n━━━━━━━━━━━━━━━\n"
+    for i, o in enumerate(all_orders):  
+        origin_admin = o.get("admin_name") or "الأدمن"
+        status_line = f"🟩 [#{o['number']}] 🕒 {o['time']} (👤 {origin_admin})" if o["done"] else (f"🟦 [#{o['number']}] 🕒 {o['time']} 👤 قيد التوصيل ({o['taken_by']}) [من {origin_admin}]" if o["taken"] else f"🟧 [#{o['number']}] 🕒 {o['time']} (👤 {origin_admin})")
+        msg += f"{status_line}\n📝 {o['text']}\n"
+        if i < len(all_orders) - 1:
+            msg += "────────────────\n"
+    msg += "━━━━━━━━━━━━━━━"  
+    await update.message.reply_text(msg)
+
+async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_name = update.effective_user.first_name
+
+    all_orders = db_get_all_orders()  
+    mine = [o for o in all_orders if o["taken_by_id"] == user_id]  
+
+    if not mine:  
+        await update.message.reply_text("📭 ما واخد حتى طلبية دابا.")  
+        return  
+
+    msg = f"📦 الطلبيات ديال {user_name}:\n\n"  
+    for o in mine:  
+        origin_admin = o.get("admin_name") or "الأدمن"
+        msg += f"#{o['number']} [{o['time']}] (من: {origin_admin}) {'🏁 تليفرات' if o['done'] else '✅ قيد التوصيل'} — {o['text']}\n"  
+
+    await update.message.reply_text(msg)
+
+async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    all_scores = db_get_scores()
+    if not all_scores:
+        await update.message.reply_text("🏆 ما كاين حتى واحد خدا شي طلبية!")
+        return
+
+    msg = "🏆 لائحة المتصدرين:\n\n"  
+    medals = ["🥇", "🥈", "🥉"]  
+    for i, (username, score) in enumerate(all_scores):  
+        msg += f"{medals[i] if i < 3 else f'{i+1}.'} {username} — {score} طلبية\n"  
+
+    await update.message.reply_text(msg)
+
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    s = db_get_stats()
+    today = datetime.now().strftime("%d/%m/%Y")
+    msg = f"📊 إحصائيات الطلبيات — {today}\n\n📦 المجموع: {s['total']}\n🏁 تليفرات: {s['done']}\n✅ جارية: {s['in_progress']}\n⏳ مازال ما تشدات: {s['waiting']}"
+    await update.message.reply_text(msg)
+
+async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ هاد الأمر مخصص للأدمن فقط.")
+        return
+
+    db_clear_all()  
+    await update.message.reply_text("🗑️ تم تصفير الطلبيات والسكورات بنجاح، واللوافريا بقاو مسجلين ف السيستم!")
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_name = update.effective_user.first_name or update.effective_user.username or "ليفرور"
+    db_add_score(user_name, 0, user_id=user_id)
+    await update.message.reply_text("👋 أهلاً بيك ف بوت إدارة الطلبيات!")
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+init_db()
+
+app = ApplicationBuilder().token(TOKEN).build()
+
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("cmd", cmd))
+app.add_handler(CommandHandler("cmd_to", cmd_to))
+app.add_handler(CommandHandler("delete", delete_order))
+app.add_handler(CommandHandler("list", list_orders))
+app.add_handler(CommandHandler("myorders", my_orders))
+app.add_handler(CommandHandler("top", top))
+app.add_handler(CommandHandler("stats", stats))
+app.add_handler(CommandHandler("clear", clear))
+app.add_handler(CallbackQueryHandler(button))
+
+if RENDER_EXTERNAL_URL:
+    print(f"🌐 Running with Webhook on port {PORT}...")
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        secret_token="MySuperSecretToken123",
+        webhook_url=f"{RENDER_EXTERNAL_URL}/"
+    )
+else:
+    print("💻 RENDER_EXTERNAL_URL not found, running with Polling...")
+    app.run_polling()
