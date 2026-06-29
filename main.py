@@ -359,14 +359,13 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 international_phone = "+212" + clean_digits[1:]
                 formatted_text = formatted_text.replace(p, international_phone)
 
-        # 🚀 التعديل هنا: الطلبية الموجهة للخاص تطلع بـ زر "خديتها 🚚" الأول بحال الجروب
         final_text = f"🎯 طلبية موجهة ليك ديريكت من الأدمن: {admin_name}\n🔢 طلبية #{counter}\n🕒 {now}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
 
         try:
             private_msg = await context.bot.send_message(
                 chat_id=target_id,
                 text=final_text,
-                reply_markup=build_keyboard(taken=False) # 🔙 كتبدا بـ زر واحد "خديتها 🚚"
+                reply_markup=build_keyboard(taken=False) 
             )
         except Exception as e:
             await query.edit_message_text(f"❌ فشل إرسال الطلبية لـ {driver_name}.\nError: {e}")
@@ -378,7 +377,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "number": counter,  
             "text": order_text,  
             "time": now,  
-            "taken": False, # كتدخل خاوية حتى يبرك هو على الزر ف الخاص ديالو
+            "taken": False, 
             "done": False,  
             "taken_by": None,  
             "taken_by_id": None,  
@@ -416,21 +415,39 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 formatted_text = formatted_text.replace(p, international_phone)
 
         origin_admin = order.get("admin_name") or "الأدمن"
-        
-        # 🚀 التعديل هنا: إذا كانت الميساج موجه أصلاً ف الخاص، غادي يدير ليه تعديل ويطلع الأزرار بجوج
-        if update.effective_chat.type == "private":
-            final_text = f"✅ خديتيها بنجاح:\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
+        final_text = f"✅ خديتيها بنجاح:\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
+
+        # 🚀 التعديل الجوهري هنا: التمييز بين الخاص والجروب
+        if query.message.chat.type == "private":
+            # 1. إذا كان ف الخاص (يعني ديال cmd_to): كيدير تعديل للميساج نيت ف الخاص ويطلع ليه الأزرار بجوج
+            await query.edit_message_text(
+                text=final_text,
+                reply_markup=build_keyboard(taken=True)
+            )
+            db_save_order(msg_id, order)
+            await query.answer("✅ خديتي الطلبية بنجاح ف الخاص!")
         else:
-            final_text = f"✅ خديتيها بنجاح:\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
+            # 2. إذا كان ف الجروب: كيمسح الميساج نهائياً من الجروب ويصيفط نسخة لخاص ديال الليفرور
+            try:
+                private_msg = await context.bot.send_message(
+                    chat_id=user_id,
+                    text=final_text,
+                    reply_markup=build_keyboard(taken=True)
+                )
+            except Exception:
+                await query.answer("⚠️ خاصك ضروري تدخل عند البوت ف الخاص ودير /start عاد تقدر تاخد الطلبيات!", show_alert=True)
+                return
 
-        await query.edit_message_text(
-            text=final_text,
-            reply_markup=build_keyboard(taken=True) # 🚀 دابا غادي تولي تبان "تليفرات" و "لغيتها" ف البلاصة
-        )
-        
-        db_save_order(msg_id, order)
-        await query.answer("✅ خديتي الطلبية!")  
+            try:
+                await context.bot.delete_message(chat_id=GROUP_CHAT_ID, message_id=msg_id)
+            except Exception as e:
+                print(f"Error deleting group message: {e}")
+            
+            db_clear_specific_order(msg_id)
+            db_save_order(private_msg.message_id, order)
+            await query.answer("✅ خديتي الطلبية، تم مسحها من الجروب وإرسالها لخاصك!")
 
+        # إرسال إشعار للأدمن
         for admin_id in ADMIN_IDS:
             try:
                 await context.bot.send_message(
@@ -496,12 +513,20 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         origin_admin = order.get("admin_name") or "الأدمن"
         
-        await query.edit_message_text(
-            text=f"🔄 (رجعات خاوية) طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 الطلبية:\n\n{order['text']}",
-            reply_markup=build_keyboard(taken=False)
-        )
-        
-        db_save_order(msg_id, order)
+        # إذا ألغاها من الخاص وكانت أصلاً ديال الخاص (cmd_to) كيرجعها خاوية ف الخاص نيت، و إلا كيرجعها للجروب
+        if query.message.chat.type == "private":
+            await query.edit_message_text(
+                text=f"🔄 (رجعات خاوية) طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 الطلبية:\n\n{order['text']}",
+                reply_markup=build_keyboard(taken=False)
+            )
+            db_save_order(msg_id, order)
+        else:
+            await query.edit_message_text(
+                text=f"🔄 (رجعات خاوية) طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 الطلبية:\n\n{order['text']}",
+                reply_markup=build_keyboard(taken=False)
+            )
+            db_save_order(msg_id, order)
+            
         await query.answer("❌ تم الإلغاء، الطلبية رجعات خاوية.")
 
         for admin_id in ADMIN_IDS:
