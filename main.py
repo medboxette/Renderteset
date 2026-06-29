@@ -365,7 +365,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             private_msg = await context.bot.send_message(
                 chat_id=target_id,
                 text=final_text,
-                reply_markup=build_only_take_keyboard()
+                reply_markup=build_keyboard(taken=True) # الأدمن كيصيفطها ديريكت واخذة ومعاها أزرار التحكم
             )
         except Exception as e:
             await query.edit_message_text(f"❌ فشل إرسال الطلبية لـ {driver_name}.\nError: {e}")
@@ -379,7 +379,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "time": now,  
             "taken": True,  
             "done": False,  
-            "taken_by": None,  
+            "taken_by": driver_name,  
             "taken_by_id": target_id,  
             "phone": phones_str,
             "admin_name": admin_name
@@ -395,15 +395,14 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return  
 
     if data == "take":  
-        if order["taken"] and order.get("taken_by_id") != user_id:  
+        if order["taken"]:  
             await query.answer("❌ هاد الطلبية خداها شي واحد آخر", show_alert=True)  
             return  
 
-        if not order["taken"]:
-            order["taken"] = True  
-            order["taken_by"] = user  
-            order["taken_by_id"] = user_id
-            db_add_score(user, +1, user_id=user_id)
+        order["taken"] = True  
+        order["taken_by"] = user  
+        order["taken_by_id"] = user_id
+        db_add_score(user, +1, user_id=user_id)
 
         formatted_text = order['text']
         raw_phones = re.findall(r'(?:\+212|0)[ \-_]*[567](?:[ \-_]*\d){8}', formatted_text)
@@ -419,18 +418,27 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         final_text = f"✅ خديتيها بنجاح:\n🔢 طلبية #{order['number']}\n🕒 {order['time']}\n👤 بواسطة: {origin_admin}\n\n📦 تفاصيل الطلبية:\n\n{formatted_text}"
 
         try:
-            await query.edit_message_text(
+            # 🚀 التعديل هنا: كنصيفطو الكوموند لخاص ديال الليفرور أولاً
+            private_msg = await context.bot.send_message(
+                chat_id=user_id,
                 text=final_text,
                 reply_markup=build_keyboard(taken=True)
             )
-        except Exception as e:
+        except Exception:
             await query.answer("⚠️ خاصك ضروري تدخل عند البوت ف الخاص ودير /start عاد تقدر تاخد الطلبيات!", show_alert=True)
             return
-        
-        db_clear_specific_order(msg_id)
-        db_save_order(query.message.message_id, order)
 
-        await query.answer("✅ خديتي الطلبية!")  
+        # 🚀 التعديل هنا: كنمسحو الميساج من الجروب بصفة نهائية باش ميبقاش معلق تما
+        try:
+            await context.bot.delete_message(chat_id=GROUP_CHAT_ID, message_id=msg_id)
+        except Exception as e:
+            print(f"Error deleting group message: {e}")
+        
+        # كنمسحو الإدخال القديم ديال الجروب ونعوضوه بمعرف رسالة الخاص الجديد
+        db_clear_specific_order(msg_id)
+        db_save_order(private_msg.message_id, order)
+
+        await query.answer("✅ خديتي الطلبية، تم مسحها من الجروب وإرسالها لخاصك!")  
 
         for admin_id in ADMIN_IDS:
             try:
@@ -507,7 +515,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             print(f"Error re-sending to group: {e}")
 
         await query.message.delete()
-        await query.answer("❌ تم الإلغاء، الطلبية رجعات للجروب.")
+        await query.answer("❌ تم الإلغاء، الطلبية رجعات للجروب ومسحناها من الخاص.")
 
         for admin_id in ADMIN_IDS:
             try:
